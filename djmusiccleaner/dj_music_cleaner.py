@@ -160,9 +160,35 @@ class DJMusicCleaner:
     def setup_musicbrainz(self):
         """Initialize MusicBrainz API"""
         if MUSICBRAINZ_AVAILABLE:
-            musicbrainzngs.set_useragent("DJMusicCleaner", "1.0", "dj@example.com")
+            # Use a real contact email to avoid additional throttling
+            musicbrainzngs.set_useragent(
+                "DJMusicCleaner", "1.0", "djmusiccleaner@users.noreply.github.com"
+            )
+            # Respect default MusicBrainz rate limits
             musicbrainzngs.set_rate_limit(limit_or_interval=1.0, new_requests=1)
+            # Ensure requests do not hang forever
+            musicbrainzngs.set_timeout(10)
             print("🌐 MusicBrainz API initialized")
+
+    def _mb_request(self, func, *args, **kwargs):
+        """Call a MusicBrainz function with retry and backoff."""
+        if not MUSICBRAINZ_AVAILABLE:
+            return None
+
+        for delay in (0.5, 1, 2):
+            try:
+                return func(*args, **kwargs)
+            except musicbrainzngs.WebServiceError as exc:
+                code = getattr(getattr(exc, "cause", None), "code", None)
+                if code in (429, 500, 502, 503, 504):
+                    print(f"   ⚠️ MusicBrainz error {code}, retrying in {delay}s...")
+                    time.sleep(delay)
+                    continue
+                print(f"   ❌ MusicBrainz request failed: {exc}")
+                return None
+
+        print("   ❌ MusicBrainz request failed after retries")
+        return None
             
     def analyze_audio_quality(self, filepath):
         """Analyze audio quality and format details"""
@@ -1364,13 +1390,17 @@ class DJMusicCleaner:
                 return None
             
             print(f"   📝 Searching MusicBrainz for: '{title.strip()}'")
-            
+
             # Enhanced search with tag information
-            result = musicbrainzngs.search_recordings(
-                query=title.strip(), 
+            result = self._mb_request(
+                musicbrainzngs.search_recordings,
+                query=title.strip(),
                 limit=5,
-                strict=False
+                strict=False,
             )
+
+            if not result:
+                return None
             
             print(f"   📝 Found {len(result.get('recording-list', []))} potential matches")
             
@@ -1473,24 +1503,26 @@ class DJMusicCleaner:
                 if score > 0.75:
                     year = None
                     album = None
-                    
+
                     try:
                         if MUSICBRAINZ_AVAILABLE and recording_id:
-                            recording_info = musicbrainzngs.get_recording_by_id(
-                                recording_id, 
+                            recording_info = self._mb_request(
+                                musicbrainzngs.get_recording_by_id,
+                                recording_id,
                                 includes=['releases']
                             )
-                            
-                            recording_data = recording_info['recording']
-                            if 'release-list' in recording_data:
-                                for release in recording_data['release-list']:
-                                    if 'date' in release and not year:
-                                        year = self.extract_year_from_date(release['date'])
-                                    if 'title' in release and not album:
-                                        album = self.clean_text(release['title'])
-                                    if year and album:
-                                        break
-                    except:
+
+                            if recording_info and 'recording' in recording_info:
+                                recording_data = recording_info['recording']
+                                if 'release-list' in recording_data:
+                                    for release in recording_data['release-list']:
+                                        if 'date' in release and not year:
+                                            year = self.extract_year_from_date(release['date'])
+                                        if 'title' in release and not album:
+                                            album = self.clean_text(release['title'])
+                                        if year and album:
+                                            break
+                    except Exception:
                         pass
                     
                     genre = self.determine_genre(artist, title, album or '')
