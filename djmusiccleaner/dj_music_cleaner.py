@@ -1469,7 +1469,9 @@ class DJMusicCleaner:
         try:
             print(f"   🎵 Fingerprinting audio...")
             
-            for score, recording_id, title, artist in acoustid.match(self.acoustid_api_key, filepath):
+            for score, recording_id, title, artist in acoustid.match(
+                self.acoustid_api_key, filepath, meta="recordings releases recordingids"
+            ):
                 if score > 0.75:
                     year = None
                     album = None
