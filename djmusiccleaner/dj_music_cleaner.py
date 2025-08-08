@@ -27,6 +27,12 @@ except ImportError:
     pass
 
 try:
+    from rapidfuzz import fuzz
+    _RF = True
+except Exception:
+    _RF = False
+
+try:
     from tqdm import tqdm
 except ImportError:
     print("⚠️  tqdm not installed. Run: pip install tqdm")
@@ -163,6 +169,231 @@ class DJMusicCleaner:
             musicbrainzngs.set_useragent("DJMusicCleaner", "1.0", "dj@example.com")
             musicbrainzngs.set_rate_limit(limit_or_interval=1.0, new_requests=1)
             print("🌐 MusicBrainz API initialized")
+    
+    def sanitize_tag_value(self, value):
+        """
+        Advanced tag sanitization utility.
+        Remove domains/brands via compiled regex.
+        Strip brackets, trailing site slugs after -.
+        Collapse separators; return None if empty or a bare TLD.
+        """
+        if not value or not isinstance(value, str):
+            return None
+        
+        # Domain/brand removal patterns
+        domain_patterns = [
+            r'(?i)(?:https?://)?(?:www\.)?[a-z0-9-]+\.(?:com|net|org|in|dev|co|biz|info|so)(?:/\S*)?',
+            r'(?i)\b(?:masstamilan|djmaza|songspk|pagalworld|djpunjab|tamilwire|tamilrockers?|isaimini|tamildbox|tamilyogi|moviesda|kuttymovies|starmusiq|vmusiq|downloadsouthmp3|uyirvani|tamiltunes|sensongsmp3|scenerockers)\b',
+            r'(?i)hearthis\.at',
+        ]
+        
+        for pattern in domain_patterns:
+            value = re.sub(pattern, '', value)
+        
+        # Remove brackets with site references
+        bracket_patterns = [
+            r'\[.*?\.(?:com|in|net|org|dev).*?\]',
+            r'\(.*?\.(?:com|in|net|org|dev).*?\)',
+            r'\[.*?(?:masstamilan|djmaza|songspk|pagalworld|djpunjab|tamilwire|tamilrockers|isaimini|tamildbox|tamilyogi|moviesda|kuttymovies).*?\]',
+            r'\(.*?(?:masstamilan|djmaza|songspk|pagalworld|djpunjab|tamilwire|tamilrockers|isaimini|tamildbox|tamilyogi|moviesda|kuttymovies).*?\)',
+        ]
+        
+        for pattern in bracket_patterns:
+            value = re.sub(pattern, '', value)
+        
+        # Remove trailing site slugs after -
+        value = re.sub(r'\s*-\s*(?:masstamilan|djmaza|songspk|pagalworld|djpunjab|tamilwire|tamilrockers|isaimini|tamildbox|tamilyogi|moviesda|kuttymovies|starmusiQ)(?:\.(?:com|dev|in|net|org))?\s*$', '', value, flags=re.IGNORECASE)
+        
+        # Collapse multiple separators
+        value = re.sub(r'\s*[-–—]\s*', ' - ', value)  # Normalize dashes
+        value = re.sub(r'\s*[,&]\s*', ', ', value)    # Normalize commas and ampersands
+        value = re.sub(r'\s+', ' ', value)            # Collapse whitespace
+        
+        # Final sweep for bare TLDs / stubs
+        value = re.sub(r'(?i)\b(?:com|net|org|in|dev|co|biz|info|so)\b', '', value)
+        
+        # Clean up the result
+        value = value.strip(' -,&.')
+        
+        # Return None for junk values that should cause tag deletion
+        if not value:
+            return None
+        
+        # Check for pollution patterns that should be deleted
+        pollution_patterns = [
+            r'^\.+$',  # Just dots
+            r'^\.(?:com|net|org|in|dev|co|biz|info|so)$',  # Bare TLDs
+            r'^(?:com|net|org|in|dev|co|biz|info|so)$',  # Bare TLDs without dot
+            r'^[.\-,&\s]+$',  # Only separators/whitespace
+            r'^(?:masstamilan|djmaza|songspk|pagalworld|djpunjab|tamilwire|tamilrockers?|isaimini|tamildbox|tamilyogi|moviesda|kuttymovies|starmusiq|vmusiq)(?:\.(?:com|dev|in|net|org|so))?$',  # Exact piracy site names
+        ]
+        
+        for pattern in pollution_patterns:
+            if re.match(pattern, value, re.IGNORECASE):
+                return None
+        
+        return value
+    
+    def normalize_list(self, value):
+        """
+        Turn 'Artist1 - Artist2 & Artist3' into 'Artist1, Artist2, Artist3'.
+        Use for TPE1/TOLY/TEXT/TCOM/TPE2.
+        """
+        if not value:
+            return value
+        
+        # Split on various separators and clean each part
+        parts = re.split(r'\s*[-–—&,]\s*', value)
+        cleaned_parts = []
+        
+        for part in parts:
+            cleaned = self.sanitize_tag_value(part)
+            if cleaned:
+                cleaned_parts.append(cleaned)
+        
+        return ', '.join(cleaned_parts) if cleaned_parts else None
+    
+    def parse_year_safely(self, value):
+        """
+        Parse year safely from TDRC. If invalid, extract 4-digit year from any token; else drop.
+        """
+        if not value:
+            return None
+        
+        # Try direct parsing first
+        try:
+            if isinstance(value, int):
+                year = int(value)
+                if 1900 <= year <= 2030:
+                    return str(year)
+            elif isinstance(value, str):
+                # Try to parse as year directly
+                year_match = re.search(r'\b(19\d{2}|20[0-3]\d)\b', value)
+                if year_match:
+                    return year_match.group(1)
+        except (ValueError, TypeError):
+            pass
+        
+        return None
+    
+    def _dedupe_path(self, path):
+        """Avoid filename collisions by adding (n) suffix"""
+        base, ext = os.path.splitext(path)
+        n = 1
+        cand = path
+        while os.path.exists(cand):
+            cand = f"{base} ({n}){ext}"
+            n += 1
+        return cand
+    
+    def _tokenize(self, s):
+        """Helper for tokenizing strings for similarity comparison"""
+        s = re.sub(r'[^\w\s]', ' ', s.lower())
+        return [t for t in s.split() if t and t not in {'the','a','an','feat','ft','and'}]
+    
+    def compute_online_match_quality(self, current_metadata, online_metadata):
+        """
+        Enhanced online match gate with rapidfuzz support.
+        Accept only if ≥2 signals pass; otherwise skip and log online_match_rejected.
+        """
+        signals = 0
+
+        ct = current_metadata.get('title','') or ''
+        ot = online_metadata.get('title','') or ''
+        ca = current_metadata.get('artist','') or ''
+        oa = online_metadata.get('artist','') or ''
+
+        if ct and ot:
+            if _RF:
+                if fuzz.token_set_ratio(ct, ot) >= 85:
+                    signals += 1
+            else:
+                s1, s2 = set(self._tokenize(ct)), set(self._tokenize(ot))
+                if s1 and len(s1 & s2) / max(len(s1), len(s2)) >= 0.7:
+                    signals += 1
+
+        if ca and oa:
+            if _RF:
+                if fuzz.token_set_ratio(ca, oa) >= 80:
+                    signals += 1
+            else:
+                s1, s2 = set(self._tokenize(ca)), set(self._tokenize(oa))
+                if s1 and len(s1 & s2) / max(len(s1), len(s2)) >= 0.5:
+                    signals += 1
+
+        cy = self.parse_year_safely(current_metadata.get('year',''))
+        oy = self.parse_year_safely(online_metadata.get('year',''))
+        if oy:
+            try:
+                oy_int = int(oy)
+                if not cy:
+                    signals += 1
+                else:
+                    try:
+                        cy_int = int(cy)
+                        if abs(oy_int - cy_int) <= 2:
+                            signals += 1
+                    except (ValueError, TypeError):
+                        signals += 1  # Online year is valid, current is not
+            except (ValueError, TypeError):
+                pass  # Online year is not numeric, skip this signal
+
+        return signals >= 2
+    
+    def infer_genre_from_path_or_metadata(self, filepath, current_genre):
+        """
+        Genre mapping: infer from path or original TCON (Tamil/Telugu), 
+        else leave if clean, else fallback "Indian".
+        """
+        # Check path for language indicators
+        path_lower = str(filepath).lower()
+        
+        if 'tamil' in path_lower:
+            return 'Tamil'
+        elif 'telugu' in path_lower:
+            return 'Telugu'
+        elif 'hindi' in path_lower or 'bollywood' in path_lower:
+            return 'Bollywood'
+        elif 'punjabi' in path_lower:
+            return 'Punjabi'
+        
+        # Check current genre - preserve any clean specific genre
+        if current_genre:
+            cg = self.sanitize_tag_value(current_genre)
+            if cg:
+                return cg.title()
+        
+        # Fallback
+        return 'Indian'
+    
+    def should_set_bpm(self, audio, new_bpm):
+        """
+        BPM policy: only set TBPM if missing; don't overwrite a numeric value.
+        """
+        if 'TBPM' not in audio:
+            return True
+        
+        try:
+            current_bpm = str(audio['TBPM']).strip()
+            # If current BPM is numeric, don't overwrite
+            float(current_bpm)
+            return False
+        except (ValueError, AttributeError):
+            # Current BPM is not numeric, safe to overwrite
+            return True
+    
+    def is_high_quality_for_move(self, bitrate_kbps, sample_rate_khz=None):
+        """
+        High-quality rule: set is_high_quality only when 320kbps & good rate;
+        move/rename only when high-quality and online match accepted.
+        """
+        if bitrate_kbps < 320:
+            return False
+        
+        if sample_rate_khz and sample_rate_khz < 44.0:
+            return False
+        
+        return True
             
     def analyze_audio_quality(self, filepath):
         """Analyze audio quality and format details"""
@@ -181,10 +412,10 @@ class DJMusicCleaner:
             minutes = int(length_seconds // 60)
             seconds = int(length_seconds % 60)
             
-            # Determine quality rating
-            is_high_quality = self.is_high_quality(bitrate_kbps, sample_rate_khz)
-            quality_rating = "HIGH" if is_high_quality else "LOW"
-            quality_message = "✅ High quality" if is_high_quality else "⚠️ Low quality - needs replacement"
+            # Determine quality rating using move logic for consistency
+            is_high_quality_for_move = self.is_high_quality_for_move(bitrate_kbps, sample_rate_khz)
+            quality_rating = "HIGH" if is_high_quality_for_move else "LOW"
+            quality_message = "✅ High quality" if is_high_quality_for_move else "⚠️ Low quality - needs replacement"
             
             print(f"   🎧 Quality: {quality_message} ({bitrate_kbps}kbps, {sample_rate_khz}kHz)")
             
@@ -194,13 +425,13 @@ class DJMusicCleaner:
                 'length': f"{minutes}:{seconds:02d}",
                 'channels': channels,
                 'encoding': getattr(info, 'encoding', 'Unknown'),
-                'is_high_quality': is_high_quality,
+                'is_high_quality': is_high_quality_for_move,
                 'quality_rating': quality_rating
             }
             
-            # Add quality tag to MP3 comments
-            quality_text = f"QUALITY: {bitrate_kbps}kbps, {sample_rate_khz}kHz, {quality_rating}"
-            self.add_to_comments(filepath, quality_text)
+            # Return quality info without writing to file
+            # Caller decides when to write comments based on HQ mode
+            quality_info['quality_text'] = f"QUALITY: {bitrate_kbps}kbps, {sample_rate_khz}kHz, {quality_rating}"
             
             return quality_info
             
@@ -935,7 +1166,7 @@ class DJMusicCleaner:
                     comment = str(audio.get('COMM::eng', ''))
                     key = str(audio.get('TKEY', ''))
                     bpm = str(audio.get('TBPM', ''))
-                    year = str(audio.get('TDRC', str(audio.get('TYER', ''))))
+                    year = self.parse_year_safely(str(audio.get('TDRC', str(audio.get('TYER', ''))))) or ''
                     
                     # Get file info
                     file_size = os.path.getsize(file_path)
@@ -1220,7 +1451,7 @@ class DJMusicCleaner:
             return False
 
     def clean_metadata(self, mp3_file):
-        """Clean metadata from common junk patterns"""
+        """Enhanced metadata cleaning with comprehensive tag scrubbing"""
         try:
             if not os.path.exists(mp3_file):
                 print(f"File not found: {mp3_file}")
@@ -1234,60 +1465,129 @@ class DJMusicCleaner:
             changes = {}
             cleaning_actions = []
             
-            # Expand fields to clean - clean all possible ID3 fields
-            fields_to_clean = {
+            # Comprehensive fields to clean with proper sanitization
+            text_fields = {
                 'TIT2': 'title',
-                'TPE1': 'artist',
+                'TPE1': 'artist', 
                 'TALB': 'album',
                 'TPE2': 'album_artist',
                 'TPE3': 'conductor',
                 'TPE4': 'remixer',
-                'TEXT': 'lyricist',  # Specifically added for lyricist
+                'TEXT': 'lyricist',
                 'TCOM': 'composer',
                 'TCON': 'genre',
-                'COMM': 'comments'
+                'TOLY': 'original_lyricist',
+                'TCOP': 'copyright',
+                'TENC': 'encoded_by',
+                'TIT1': 'content_group',
+                'TIT3': 'subtitle',
+                'TOPE': 'original_artist',
+                'TPUB': 'publisher',
+                'TSRC': 'isrc',
+                'TIPL': 'involved_people'
             }
             
-            # Clean each field
-            for tag, field_name in fields_to_clean.items():
+            # People list fields that need normalize_list treatment
+            people_fields = {'TPE1', 'TPE2', 'TPE3', 'TPE4', 'TEXT', 'TCOM', 'TOLY'}
+            
+            # Clean text fields with new sanitization
+            for tag, field_name in text_fields.items():
                 if tag in audio:
-                    # Special handling for COMM tag which has multiple parts
-                    if tag == 'COMM':
-                        for comment in audio.getall('COMM'):
-                            original_text = comment.text[0] if comment.text else ""
-                            original_metadata[f'comment:{comment.desc}:{comment.lang}'] = original_text
-                            clean_text = self.clean_text(original_text)
-                            
-                            # Check for download sites in comments specifically
-                            download_sites = self._extract_download_sites(original_text)
-                            if download_sites:
-                                for site in download_sites:
-                                    cleaning_actions.append(f"Removed download site '{site}' from comment")
-                            
-                            if clean_text != original_text:
-                                comment.text = [clean_text]
-                                metadata_changed = True
-                                changes[f'comment:{comment.desc}'] = {'original': original_text, 'new': clean_text}
-                    else:
-                        # Regular text fields
-                        try:
-                            original_text = audio[tag].text[0]
-                            original_metadata[field_name] = original_text
-                            clean_text = self.clean_text(original_text)
-                            
-                            # Check for download sites in this field
-                            download_sites = self._extract_download_sites(original_text)
-                            if download_sites:
-                                for site in download_sites:
-                                    cleaning_actions.append(f"Removed download site '{site}' from {field_name}")
-                                    
-                            if clean_text != original_text:
-                                audio[tag].text = [clean_text]
-                                metadata_changed = True
-                                changes[field_name] = {'original': original_text, 'new': clean_text}
-                        except (AttributeError, IndexError):
-                            # Some fields may not have text attribute or may be empty
-                            pass
+                    try:
+                        original_text = audio[tag].text[0] if audio[tag].text else ""
+                        original_metadata[field_name] = original_text
+                        
+                        # Apply appropriate cleaning based on field type
+                        if tag in people_fields:
+                            clean_text = self.normalize_list(original_text)
+                        else:
+                            clean_text = self.sanitize_tag_value(original_text)
+                        
+                        if clean_text and clean_text != original_text:
+                            audio[tag].text = [clean_text]
+                            metadata_changed = True
+                            changes[field_name] = {'original': original_text, 'new': clean_text}
+                            cleaning_actions.append(f"🧹 Cleaned: '{original_text}' → '{clean_text}'")
+                        elif not clean_text and original_text:
+                            # Remove empty/junk tags
+                            del audio[tag]
+                            metadata_changed = True
+                            cleaning_actions.append(f"🗑️ Removed junk tag: '{original_text}'")
+                    except (AttributeError, IndexError, KeyError):
+                        pass
+            
+            # Enhanced COMM handling - remove ALL spam, keep only quality/DJ info
+            keep_lines = []
+            comm_removed_count = 0
+            
+            for key in list(audio.keys()):
+                if key.startswith('COMM'):
+                    comm = audio[key]
+                    txt = (comm.text[0] if getattr(comm, "text", None) else "") or ""
+                    
+                    # Skip iTunes normalization and other spam
+                    if 'itunnorm' in key.lower() or 'itunes' in txt.lower():
+                        del audio[key]
+                        comm_removed_count += 1
+                        metadata_changed = True
+                        continue
+                    
+                    # Only keep lines with quality/DJ-relevant info
+                    if txt:
+                        for line in str(txt).splitlines():
+                            line = line.strip()
+                            if line and any(k in line.lower() for k in [
+                                'quality', 'dynamic range', 'energy', 'dj cues', 
+                                'loudness normalized', 'camelot', 'key:', 'bpm:', 
+                                'dr', 'lufs', 'rms', 'peak'
+                            ]):
+                                # Sanitize the line to remove any embedded pollution
+                                clean_line = self.sanitize_tag_value(line)
+                                if clean_line:
+                                    keep_lines.append(clean_line)
+                    
+                    del audio[key]
+                    comm_removed_count += 1
+                    metadata_changed = True
+
+            # Rebuild a single COMM::eng if we have anything useful
+            if keep_lines:
+                audio['COMM::eng'] = COMM(encoding=3, lang='eng', desc='', text="\n".join(dict.fromkeys(keep_lines)))
+                cleaning_actions.append(f"📝 Consolidated {comm_removed_count} COMM tags → 1 clean COMM::eng")
+            elif comm_removed_count > 0:
+                cleaning_actions.append(f"🗑️ Removed {comm_removed_count} spam COMM tags")
+            
+            # Enhanced TDRC (year) parsing
+            if 'TDRC' in audio:
+                try:
+                    original_year = str(audio['TDRC'])
+                    original_metadata['year'] = original_year
+                    parsed_year = self.parse_year_safely(original_year)
+                    
+                    if parsed_year and parsed_year != original_year:
+                        audio['TDRC'] = TDRC(encoding=3, text=parsed_year)
+                        metadata_changed = True
+                        changes['year'] = {'original': original_year, 'new': parsed_year}
+                        cleaning_actions.append(f"📅 Parsed year: '{original_year}' → '{parsed_year}'")
+                    elif not parsed_year:
+                        del audio['TDRC']
+                        metadata_changed = True
+                        cleaning_actions.append(f"🗑️ Removed invalid year: '{original_year}'")
+                except (AttributeError, KeyError):
+                    pass
+            
+            # If no TDRC but TYER exists, migrate
+            if 'TDRC' not in audio and 'TYER' in audio:
+                try:
+                    year_text = str(audio['TYER'])
+                    parsed_year = self.parse_year_safely(year_text)
+                    if parsed_year:
+                        audio['TDRC'] = TDRC(encoding=3, text=parsed_year)
+                        del audio['TYER']
+                        metadata_changed = True
+                        cleaning_actions.append(f"📅 Migrated TYER→TDRC: '{year_text}' → '{parsed_year}'")
+                except Exception:
+                    pass
             
             # Save changes if metadata was modified
             if metadata_changed:
@@ -1353,6 +1653,7 @@ class DJMusicCleaner:
         try:
             audio = MP3(filepath)
             title = str(audio.get('TIT2', '')).strip() if 'TIT2' in audio else ''
+            file_duration = audio.info.length  # Get file duration for filtering
             
             if not title or len(title) < 3:
                 title = Path(filepath).stem
@@ -1364,12 +1665,12 @@ class DJMusicCleaner:
             
             print(f"   📝 Searching MusicBrainz for: '{title.strip()}'")
             
-            # Enhanced search with tag information
-            result = musicbrainzngs.search_recordings(
-                query=title.strip(), 
-                limit=5,
-                strict=False
-            )
+            # Enhanced search with artist hint when available
+            artist_hint = str(audio.get('TPE1','') or '').strip()
+            if artist_hint:
+                result = musicbrainzngs.search_recordings(recording=title.strip(), artist=artist_hint, limit=5)
+            else:
+                result = musicbrainzngs.search_recordings(recording=title.strip(), limit=5)
             
             print(f"   📝 Found {len(result.get('recording-list', []))} potential matches")
             
@@ -1519,26 +1820,22 @@ class DJMusicCleaner:
         return None
 
     def enhance_metadata_online(self, filepath):
-        """🆕 Ultimate metadata enhancement with all DJ fields"""
+        """Enhanced metadata enhancement with online match gating"""
         try:
             audio = MP3(filepath)
             
             # Get current metadata
-            current_artist = str(audio.get('TPE1', '')).strip() if 'TPE1' in audio else ''
-            current_title = str(audio.get('TIT2', '')).strip() if 'TIT2' in audio else ''
-            current_album = str(audio.get('TALB', '')).strip() if 'TALB' in audio else ''
-            current_year = str(audio.get('TYER', '')).strip() if 'TYER' in audio else ''
-            current_genre = str(audio.get('TCON', '')).strip() if 'TCON' in audio else ''
+            current_metadata = {
+                'artist': str(audio.get('TPE1', '')).strip() if 'TPE1' in audio else '',
+                'title': str(audio.get('TIT2', '')).strip() if 'TIT2' in audio else '',
+                'album': str(audio.get('TALB', '')).strip() if 'TALB' in audio else '',
+                'year': str(audio.get('TDRC', '') or audio.get('TYER', '')).strip(),
+                'genre': str(audio.get('TCON', '')).strip() if 'TCON' in audio else ''
+            }
             
-            print(f"   🔍 Current - Artist: '{current_artist}', Title: '{current_title}'")
-            print(f"   🔍 Current - Album: '{current_album}', Year: '{current_year}', Genre: '{current_genre}'")
-            
-            # Force enhancement for debug
-            needs_enhancement = True
-            
-            if not needs_enhancement:
-                print(f"   ✅ Metadata is complete")
-                return False
+            print(f"   🔍 Enhancing metadata online...")
+            print(f"   🔍 Current - Artist: '{current_metadata['artist']}', Title: '{current_metadata['title']}'")
+            print(f"   🔍 Current - Album: '{current_metadata['album']}', Year: '{current_metadata['year']}', Genre: '{current_metadata['genre']}'")
             
             print(f"   🌐 Trying online identification...")
             
@@ -1550,50 +1847,66 @@ class DJMusicCleaner:
                 print(f"   🎵 Text search failed, trying fingerprinting...")
                 identified = self.identify_by_fingerprint(filepath)
             
-            if identified and identified['confidence'] > 0.7:
+            if identified:
+                # Apply online match gating
+                online_metadata = {
+                    'artist': identified.get('artist', ''),
+                    'title': identified.get('title', ''),
+                    'year': identified.get('year', ''),
+                    'album': identified.get('album', '')
+                }
+                
+                match_quality = self.compute_online_match_quality(current_metadata, online_metadata)
+                
+                print(f"   💡 Online candidate via {identified['method']} → {'ACCEPTED' if match_quality else 'REJECTED'}")
+                
+                if not match_quality:
+                    print(f"   ❌ Online match rejected - insufficient signal quality")
+                    self.stats['identification_failures'] += 1
+                    return False
+                
                 updated_fields = []
                 
-                # Update basic fields
-                if identified['artist']:
-                    audio['TPE1'] = TPE1(encoding=3, text=identified['artist'])
-                    updated_fields.append(f"artist: '{identified['artist']}'")
+                # Update basic fields with sanitization
+                if identified.get('artist'):
+                    clean_artist = self.sanitize_tag_value(identified['artist'])
+                    if clean_artist:
+                        audio['TPE1'] = TPE1(encoding=3, text=clean_artist)
+                        updated_fields.append(f"artist: '{clean_artist}'")
                 
-                if identified['title']:
-                    audio['TIT2'] = TIT2(encoding=3, text=identified['title'])
-                    updated_fields.append(f"title: '{identified['title']}'")
+                if identified.get('title'):
+                    clean_title = self.sanitize_tag_value(identified['title'])
+                    if clean_title:
+                        audio['TIT2'] = TIT2(encoding=3, text=clean_title)
+                        updated_fields.append(f"title: '{clean_title}'")
                 
-                # Update year
+                # Update year with safe parsing
                 if identified.get('year'):
-                    try:
-                        audio['TDRC'] = TDRC(encoding=3, text=identified['year'])
-                        updated_fields.append(f"year: '{identified['year']}'")
-                    except:
-                        audio['TYER'] = TYER(encoding=3, text=identified['year'])
-                        updated_fields.append(f"year: '{identified['year']}'")
+                    parsed_year = self.parse_year_safely(identified['year'])
+                    if parsed_year:
+                        audio['TDRC'] = TDRC(encoding=3, text=parsed_year)
+                        updated_fields.append(f"year: '{parsed_year}'")
                 
                 # Update album
                 if identified.get('album'):
-                    audio['TALB'] = TALB(encoding=3, text=identified['album'])
-                    updated_fields.append(f"album: '{identified['album']}'")
+                    clean_album = self.sanitize_tag_value(identified['album'])
+                    if clean_album:
+                        audio['TALB'] = TALB(encoding=3, text=clean_album)
+                        updated_fields.append(f"album: '{clean_album}'")
                 
-                # Update genre
-                if identified.get('genre'):
-                    audio['TCON'] = TCON(encoding=3, text=identified['genre'])
-                    updated_fields.append(f"genre: '{identified['genre']}'")
+                # Enhanced genre mapping
+                inferred_genre = self.infer_genre_from_path_or_metadata(filepath, identified.get('genre', ''))
+                if inferred_genre:
+                    audio['TCON'] = TCON(encoding=3, text=inferred_genre)
+                    updated_fields.append(f"genre: '{inferred_genre}'")
                 
-                # Estimate and set BPM
+                # BPM policy: only set if missing
                 if identified.get('genre'):
                     estimated_bpm = self.estimate_bpm_from_genre(identified['genre'])
-                    if estimated_bpm:
+                    if estimated_bpm and self.should_set_bpm(audio, estimated_bpm):
                         audio['TBPM'] = TBPM(encoding=3, text=estimated_bpm)
                         updated_fields.append(f"BPM: '{estimated_bpm}'")
                         self.stats['bpm_found'] += 1
-                
-                # Add label info as comment
-                if identified.get('label'):
-                    comment_text = f"Label: {identified['label']}"
-                    audio['COMM::eng'] = COMM(encoding=3, lang='eng', desc='', text=comment_text)
-                    updated_fields.append(f"label: '{identified['label']}'")
                 
                 audio.save()
                 
@@ -1675,20 +1988,23 @@ class DJMusicCleaner:
         print(f"📂 Output folder: {output_folder}")
         print(f"🎧 Quality filter: {'ON - Only 320kbps files will be moved' if high_quality_only else 'OFF'}")
         
-        # Initialize report manager
+        # Initialize report manager with robust import
         try:
-            from .reports import DJReportManager
-            report_manager = DJReportManager(base_dir=output_folder)
-        except ImportError:
-            # Provide a stub if reports module isn't present
-            class ReportManagerStub:
-                def is_file_already_processed(self, filepath): return None
-                def mark_file_as_processed(self, filepath, info): pass
-                def save_duplicates_report(self, duplicates): pass
-                def generate_changes_report(self): pass
-                def generate_low_quality_report(self): pass
-                def generate_session_summary(self, stats): pass
-            report_manager = ReportManagerStub()
+            from .reports import DJReportManager  # package mode
+        except Exception:
+            try:
+                from reports import DJReportManager  # script mode
+            except Exception:
+                class DJReportManager:  # stub fallback
+                    def __init__(self, base_dir=None): pass
+                    def is_file_already_processed(self, filepath): return None
+                    def mark_file_as_processed(self, filepath, info): pass
+                    def save_duplicates_report(self, duplicates): pass
+                    def generate_changes_report(self): pass
+                    def generate_low_quality_report(self): pass
+                    def generate_session_summary(self, stats): pass
+        
+        report_manager = DJReportManager(base_dir=output_folder)
         
         # Import Rekordbox XML if specified
         rekordbox_data = None
@@ -1748,9 +2064,6 @@ class DJMusicCleaner:
                 try:
                     print(f"\n🔎 Processing: {file}")
                     
-                    # Load MP3 file
-                    audio = MP3(input_file)
-                    
                     # Create file info dictionary
                     file_info = {
                         'input_path': input_file,
@@ -1763,14 +2076,16 @@ class DJMusicCleaner:
                         'sample_rate': 0
                     }
         
-                    # Analyze audio quality if enabled
+                    # STRICT HIGH-QUALITY MODE: Analyze quality FIRST
                     if analyze_quality:
                         try:
                             quality_info = self.analyze_audio_quality(input_file)
                             if quality_info:
                                 file_info['bitrate'] = quality_info.get('bitrate_kbps', 0)
                                 file_info['sample_rate'] = quality_info.get('sample_rate_khz', 0)
-                                file_info['is_high_quality'] = self.is_high_quality(file_info['bitrate'], file_info['sample_rate'])
+                                file_info['is_high_quality'] = self.is_high_quality_for_move(file_info['bitrate'], file_info['sample_rate'])
+                                
+                                self.stats['quality_analyzed'] += 1
                                 
                                 if file_info['is_high_quality']:
                                     self.stats['high_quality'] += 1
@@ -1779,10 +2094,28 @@ class DJMusicCleaner:
                                     self.stats['low_quality'] += 1
                                     print(f"   ⚠️ Low quality: {file_info['bitrate']}kbps @ {file_info['sample_rate']}kHz")
                                     
-                                self.stats['quality_analyzed'] += 1
+                                    # STRICT MODE: Skip all processing for low-quality files
+                                    if high_quality_only:
+                                        print(f"   ⏭️ Low quality file skipped (no changes made)")
+                                        file_info['changes'].append("Skipped - low quality (no changes made)")
+                                        
+                                        # Mark as processed in database but skip all modifications
+                                        report_manager.mark_file_as_processed(input_file, file_info)
+                                        self.stats['processed'] += 1
+                                        processed_files.append(file_info)
+                                        continue
+                                        
                                 file_info['changes'].append(f"Quality analyzed: {file_info['bitrate']}kbps @ {file_info['sample_rate']}kHz")
+                                
+                                # Add quality comment only for files that will be processed
+                                if quality_info.get('quality_text'):
+                                    self.add_to_comments(input_file, quality_info['quality_text'])
+                                    file_info['changes'].append("Added quality comment")
                         except Exception as e:
                             print(f"   ❌ Error analyzing quality: {e}")
+                    
+                    # Load MP3 file for processing (only for HQ files or when HQ mode is off)
+                    audio = MP3(input_file)
                     
                     # Store original metadata
                     for tag in audio:
@@ -1898,10 +2231,20 @@ class DJMusicCleaner:
                         except Exception as e:
                             print(f"   ⚠️ Loudness normalization error: {e}")
                     
+                    # Check if we should rename based on online enhancement success
+                    allow_rename = True
+                    if enhance_online:
+                        # Only rename if enhancement actually succeeded this file
+                        allow_rename = file_info.get('enhanced', False)
+                    
                     # Generate clean filename
-                    clean_filename = self.generate_clean_filename(artist, title, year if include_year_in_filename else None)
-                    if not clean_filename.lower().endswith('.mp3'):
-                        clean_filename += '.mp3'
+                    if allow_rename:
+                        clean_filename = self.generate_clean_filename(artist, title, year if include_year_in_filename else None)
+                        if not clean_filename.lower().endswith('.mp3'):
+                            clean_filename += '.mp3'
+                    else:
+                        # Use original filename if enhancement was rejected
+                        clean_filename = os.path.basename(input_file)
                     
                     # Only move high-quality files to output if filter is enabled
                     if not high_quality_only or (high_quality_only and file_info['is_high_quality']):
@@ -1912,13 +2255,19 @@ class DJMusicCleaner:
                         if not os.path.exists(output_subdir):
                             os.makedirs(output_subdir, exist_ok=True)
                             
-                        output_file = os.path.join(output_subdir, clean_filename)
+                        output_file = self._dedupe_path(os.path.join(output_subdir, clean_filename))
                         
                         # Copy file to output location
                         shutil.copy2(input_file, output_file)
                         file_info['output_path'] = output_file
                         print(f"   💾 Saved to: {output_file}")
-                        file_info['changes'].append(f"Renamed to: {clean_filename}")
+                        
+                        # Only log rename if filename actually changed
+                        original_name = os.path.basename(input_file)
+                        if clean_filename != original_name:
+                            file_info['changes'].append(f"Renamed to: {clean_filename}")
+                        else:
+                            file_info['changes'].append("Kept original filename")
                     else:
                         print(f"   ⚠️ Low quality file not moved to output folder")
                         file_info['changes'].append("Low quality file not moved to output folder")
@@ -1939,7 +2288,7 @@ class DJMusicCleaner:
             print("\n🔍 Checking for duplicates...")
             duplicates = self.find_duplicates(output_folder)
             if duplicates:
-                report_manager.save_duplicates_report(duplicates)
+                report_manager.generate_duplicates_report(duplicates)
         
         # Generate reports if requested
         if generate_report:

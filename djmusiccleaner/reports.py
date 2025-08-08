@@ -200,9 +200,11 @@ class DJReportManager:
         print(f"📝 Detailed changes report saved: {report_path}")
         return report_path
     
-    def generate_duplicates_report(self):
+    def generate_duplicates_report(self, duplicates=None):
         """Generate a report of duplicate files"""
-        if not self.duplicate_files:
+        # Use passed duplicates or fall back to stored duplicate_files
+        duplicate_data = duplicates if duplicates is not None else self.duplicate_files
+        if not duplicate_data:
             return None
             
         report_path = os.path.join(self.reports_dir, f"duplicate_files_{self.session_timestamp}.txt")
@@ -211,26 +213,28 @@ class DJReportManager:
             f.write("DJ MUSIC CLEANER - DUPLICATE FILES REPORT\n")
             f.write("=" * 60 + "\n")
             f.write(f"Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n\n")
-            f.write(f"The following {len(self.duplicate_files)} potential duplicates were found:\n\n")
+            f.write(f"The following {len(duplicate_data)} potential duplicate groups were found:\n\n")
             
-            # Group duplicates by original file
-            duplicates_by_original = {}
-            for dup_info in self.duplicate_files:
-                original = dup_info['original']
-                if original not in duplicates_by_original:
-                    duplicates_by_original[original] = []
-                duplicates_by_original[original].append(dup_info)
-            
-            # Write grouped duplicates
-            for i, (original, duplicates) in enumerate(duplicates_by_original.items(), 1):
-                f.write(f"{i}. Original: {os.path.basename(original)}\n")
-                f.write(f"   Path: {original}\n")
-                f.write(f"   Potential duplicates ({len(duplicates)}):\n")
+            # Write duplicate groups
+            for i, dup_group in enumerate(duplicate_data, 1):
+                f.write(f"{i}. Duplicate Group #{i} ({dup_group['type']})\n")
+                f.write(f"   Match Type: {dup_group.get('match_on', 'unknown')}\n")
                 
-                for j, dup in enumerate(duplicates, 1):
-                    f.write(f"   {j}. {os.path.basename(dup['duplicate'])}\n")
-                    f.write(f"      Path: {dup['duplicate']}\n")
-                    f.write(f"      Similarity: {dup['similarity_score']:.2f}%\n")
+                if 'similarity' in dup_group:
+                    f.write(f"   Similarity: {dup_group['similarity']:.2f}\n")
+                
+                f.write(f"   Files in group ({len(dup_group['tracks'])}):\n")
+                
+                for j, track in enumerate(dup_group['tracks'], 1):
+                    track_path = str(track['path'])
+                    track_size = track.get('size', 0) // 1024  # Convert to KB
+                    f.write(f"   {j}. {os.path.basename(track_path)}\n")
+                    f.write(f"      Path: {track_path}\n")
+                    f.write(f"      Size: {track_size} KB\n")
+                    if track.get('artist'):
+                        f.write(f"      Artist: {track['artist']}\n")
+                    if track.get('title'):
+                        f.write(f"      Title: {track['title']}\n")
                 
                 f.write("\n")
                 
