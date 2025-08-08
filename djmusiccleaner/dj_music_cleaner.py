@@ -1197,9 +1197,10 @@ class DJMusicCleaner:
                 audio.add_tags()
             
             if 'COMM::eng' in audio:
-                current = str(audio['COMM::eng'])
-                if text not in current:  # Avoid duplicates
-                    audio['COMM::eng'] = COMM(encoding=3, lang='eng', desc='', text=current + "\n" + text)
+                current_comm = audio['COMM::eng']
+                current_text = current_comm.text[0] if current_comm.text else ""
+                if text not in current_text:  # Avoid duplicates
+                    current_comm.text[0] = f"{current_text}\n{text}" if current_text else text
             else:
                 audio['COMM::eng'] = COMM(encoding=3, lang='eng', desc='', text=text)
             audio.save()
