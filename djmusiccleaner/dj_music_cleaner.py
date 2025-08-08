@@ -1171,8 +1171,13 @@ class DJMusicCleaner:
             '.com', '.in', '.dev', '.net', '.org', '.co',
             'www.', 'http', 'download', 'free'
         ]
-        
+
         return any(indicator in text_lower for indicator in pollution_indicators)
+
+    def sanitize_tag_value(self, value):
+        """Sanitize a tag value and return it if still meaningful."""
+        cleaned = self.clean_text(str(value))
+        return cleaned if cleaned else None
 
     def extract_year_from_date(self, date_string):
         """Extract year from various date formats"""
@@ -1289,7 +1294,17 @@ class DJMusicCleaner:
                         except (AttributeError, IndexError):
                             # Some fields may not have text attribute or may be empty
                             pass
-            
+
+            # TIPL (involved people list) may contain structured data; remove if polluted
+            if 'TIPL' in audio:
+                tipl_value = str(audio['TIPL'])
+                if not self.sanitize_tag_value(tipl_value):
+                    original_metadata['TIPL'] = tipl_value
+                    del audio['TIPL']
+                    metadata_changed = True
+                    cleaning_actions.append("Removed TIPL tag with spam")
+                    changes['TIPL'] = {'original': tipl_value, 'new': None}
+
             # Save changes if metadata was modified
             if metadata_changed:
                 audio.save()
@@ -1625,11 +1640,12 @@ class DJMusicCleaner:
                 name = artist
             else:
                 return "Unknown Track.mp3"
-            
+
             # Sanitize for filesystem
             name = re.sub(r'[<>:"/\\|?*]', '', name)
+            name = re.sub(r'\s+', ' ', name).strip().rstrip('.')
             name = name[:120]  # Slightly longer limit for year
-            
+
             return name
         except Exception as e:
             print(f"   ❌ Error generating filename: {e}")
