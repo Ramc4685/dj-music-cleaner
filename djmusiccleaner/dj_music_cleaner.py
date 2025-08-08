@@ -1843,10 +1843,12 @@ class DJMusicCleaner:
                         if tag.startswith('T') or tag.startswith('COMM'):
                             file_info['cleaned_metadata'][tag] = str(audio[tag])
                     
+                    run_for_this_file = (not high_quality_only) or file_info['is_high_quality']
+
                     # Perform DJ-specific analysis
-                    if dj_analysis:
+                    if dj_analysis and run_for_this_file:
                         # Detect musical key
-                        if detect_key and not high_quality_only:
+                        if detect_key:
                             try:
                                 key = self.detect_musical_key(input_file)
                                 if key:
@@ -1856,9 +1858,9 @@ class DJMusicCleaner:
                                     self.stats['key_found'] += 1
                             except Exception as e:
                                 print(f"   ⚠️ Key detection error: {e}")
-                        
+
                         # Detect cue points
-                        if detect_cues and not high_quality_only:
+                        if detect_cues:
                             try:
                                 cues = self.detect_cue_points(input_file)
                                 if cues:
@@ -1875,9 +1877,9 @@ class DJMusicCleaner:
                                     file_info['changes'].append(f"Detected cue points: {cue_text}")
                             except Exception as e:
                                 print(f"   ⚠️ Cue detection error: {e}")
-                        
+
                         # Calculate energy rating
-                        if calculate_energy and not high_quality_only:
+                        if calculate_energy:
                             try:
                                 energy_result = self.calculate_energy_rating(input_file)
                                 if energy_result:
@@ -1889,9 +1891,9 @@ class DJMusicCleaner:
                                     file_info['changes'].append(f"Energy rating: {energy}/10")
                             except Exception as e:
                                 print(f"   ⚠️ Energy calculation error: {e}")
-                    
+
                     # Normalize loudness if requested
-                    if normalize_loudness and not high_quality_only:
+                    if normalize_loudness and run_for_this_file:
                         try:
                             print(f"   🔊 Normalizing loudness to {target_lufs} LUFS...")
                             self.normalize_loudness(input_file, target_lufs=target_lufs)
@@ -2093,10 +2095,12 @@ class DJMusicCleaner:
             f.write("File Changes:\n")
             f.write("-" * 30 + "\n")
             for file_info in processed_files:
-                if file_info['original'] != file_info['cleaned']:
-                    f.write(f"RENAMED: {file_info['original']} → {file_info['cleaned']}\n")
-                    if file_info['enhanced']:
-                        f.write(f"  Enhanced: Yes\n")
+                input_path = file_info.get('input_path')
+                output_path = file_info.get('output_path', input_path)
+                if input_path and output_path and input_path != output_path:
+                    f.write(f"RENAMED: {input_path} → {output_path}\n")
+                    if file_info.get('enhanced'):
+                        f.write("  Enhanced: Yes\n")
             
             if self.stats['manual_review_needed']:
                 f.write(f"\nManual Review Needed:\n")
