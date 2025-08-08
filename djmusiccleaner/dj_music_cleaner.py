@@ -1353,6 +1353,13 @@ class DJMusicCleaner:
         
         try:
             audio = MP3(filepath)
+            # Get the duration of the local file in seconds
+            file_duration = None
+            try:
+                file_duration = int(audio.info.length)
+            except Exception:
+                pass
+
             title = str(audio.get('TIT2', '')).strip() if 'TIT2' in audio else ''
             
             if not title or len(title) < 3:
@@ -1431,7 +1438,15 @@ class DJMusicCleaner:
                     print(f"   🏷️ Label: {label}")
                 print(f"   📊 Score: {score}")
                 
-                if score > 70:
+                duration_ok = True
+                if duration:
+                    try:
+                        if abs(int(duration) - int(file_duration)) > 5:
+                            duration_ok = False
+                    except Exception:
+                        pass
+
+                if score > 70 and duration_ok:
                     print(f"   ✅ Accepting match with score {score}")
                     
                     self.stats['text_search_hits'] += 1
