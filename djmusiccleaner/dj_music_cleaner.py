@@ -188,6 +188,8 @@ class DJMusicCleaner:
             
             print(f"   🎧 Quality: {quality_message} ({bitrate_kbps}kbps, {sample_rate_khz}kHz)")
             
+            quality_text = f"QUALITY: {bitrate_kbps}kbps, {sample_rate_khz}kHz, {quality_rating}"
+
             quality_info = {
                 'bitrate_kbps': bitrate_kbps,
                 'sample_rate_khz': sample_rate_khz,
@@ -195,13 +197,10 @@ class DJMusicCleaner:
                 'channels': channels,
                 'encoding': getattr(info, 'encoding', 'Unknown'),
                 'is_high_quality': is_high_quality,
-                'quality_rating': quality_rating
+                'quality_rating': quality_rating,
+                'quality_text': quality_text
             }
-            
-            # Add quality tag to MP3 comments
-            quality_text = f"QUALITY: {bitrate_kbps}kbps, {sample_rate_khz}kHz, {quality_rating}"
-            self.add_to_comments(filepath, quality_text)
-            
+
             return quality_info
             
         except Exception as e:
@@ -1799,6 +1798,8 @@ class DJMusicCleaner:
                                     
                                 self.stats['quality_analyzed'] += 1
                                 file_info['changes'].append(f"Quality analyzed: {file_info['bitrate']}kbps @ {file_info['sample_rate']}kHz")
+                                if quality_info.get('quality_text') and (not high_quality_only or file_info['is_high_quality']):
+                                    self.add_to_comments(input_file, quality_info['quality_text'])
                         except Exception as e:
                             print(f"   ❌ Error analyzing quality: {e}")
                     
