@@ -117,6 +117,8 @@ python dj_music_cleaner.py --input /path/to/music --output /path/to/clean --high
 --api-key API_KEY    AcoustID API key for enhanced identification (optional if ACOUSTID_API_KEY env var is set)
 --year               Include year in filename
 --online             Enable online metadata enhancement (MusicBrainz/AcoustID)
+--verbose            Enable debug logging
+--quiet              Suppress non-warning output
 ```
 
 #### DJ Features
@@ -139,6 +141,7 @@ python dj_music_cleaner.py --input /path/to/music --output /path/to/clean --high
 --priorities         Show metadata completion priorities
 --report             Generate HTML report (default: enabled)
 --detailed-report    Generate detailed per-file changes report (default: enabled)
+--preserve-art       Preserve album art during loudness normalization
 ```
 
 ### Examples

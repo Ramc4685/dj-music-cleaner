@@ -13,11 +13,37 @@ import xml.etree.ElementTree as ET
 from pathlib import Path
 from difflib import SequenceMatcher
 from mutagen.mp3 import MP3
-from mutagen.id3 import ID3NoHeaderError, TIT2, TPE1, TALB, TCOM, COMM, TYER, TDRC, TCON, TBPM, TKEY, TLEN
+from mutagen.id3 import (
+    ID3NoHeaderError,
+    TIT2,
+    TPE1,
+    TALB,
+    TCOM,
+    COMM,
+    TYER,
+    TDRC,
+    TCON,
+    TBPM,
+    TKEY,
+    TLEN,
+)
 import unicodedata
 import traceback
 import platform
 import subprocess
+import logging
+import sys
+
+logging.basicConfig(level=logging.INFO, format="%(message)s", stream=sys.stderr)
+logger = logging.getLogger(__name__)
+
+
+def _log_print(*args, **kwargs):
+    """Route print calls through the logger for tqdm-friendly output."""
+    logger.info(" ".join(str(a) for a in args))
+
+
+print = _log_print
 
 # Optional .env support
 try:
@@ -78,7 +104,7 @@ class DJMusicCleaner:
     def __init__(self, acoustid_api_key=None):
         self.acoustid_api_key = acoustid_api_key
         self.setup_musicbrainz()
-        
+
         # Enhanced statistics tracking
         self.stats = {
             'text_search_hits': 0,
@@ -91,6 +117,9 @@ class DJMusicCleaner:
             'key_found': 0,    # 🆕
             'manual_review_needed': []
         }
+
+        # Cache external lookup results to reduce repeat API calls
+        self.lookup_cache = {}
         
         # 🆕 Genre mapping for Indian/Tamil music
         self.genre_mapping = {
@@ -227,6 +256,9 @@ class DJMusicCleaner:
             return False
             
         return True
+
+    # Backwards compatibility: some callers used a separate helper
+    is_high_quality_for_move = is_high_quality
             
     def analyze_dynamic_range(self, filepath):
         """Analyze dynamic range - crucial for DJ tracks."""
@@ -769,6 +801,8 @@ class DJMusicCleaner:
                     path = urllib.parse.unquote(location[16:])  # Remove 'file://localhost'
                     if platform.system() == 'Windows' and path.startswith('/'):
                         path = path[1:]  # Remove leading slash on Windows
+                        # TODO: Some exports use 'file://localhost/C:/...' paths.
+                        #       Verify both forms are parsed correctly on Windows.
                         
                     # Extract useful DJ metadata
                     track_data = {
@@ -986,8 +1020,15 @@ class DJMusicCleaner:
             traceback.print_exc()
             return False
             
-    def normalize_loudness(self, input_file, output_file=None, target_lufs=-14.0):
-        """Normalize the loudness of an audio file to a target LUFS value"""
+    def normalize_loudness(self, input_file, output_file=None, target_lufs=-14.0, preserve_art=False):
+        """Normalize the loudness of an audio file to a target LUFS value.
+
+        Args:
+            input_file: path to input MP3
+            output_file: optional path to write result
+            target_lufs: desired loudness
+            preserve_art: copy album art from original file when rewriting
+        """
         if not LOUDNORM_AVAILABLE:
             print("   ⚠️ Loudness normalization unavailable (pyloudnorm/soundfile missing)")
             return False
@@ -1018,7 +1059,7 @@ class DJMusicCleaner:
             # Always write a temp WAV then convert back to MP3
             temp_wav = (output_file or input_file) + ".temp.wav"
             sf.write(temp_wav, normalized_audio, rate)
-            self._convert_wav_to_mp3(temp_wav, output_file or input_file, input_file)
+            self._convert_wav_to_mp3(temp_wav, output_file or input_file, input_file, preserve_art=preserve_art)
             if os.path.exists(temp_wav):
                 os.remove(temp_wav)
                 
@@ -1045,15 +1086,16 @@ class DJMusicCleaner:
             print(f"   ❌ Loudness normalization error: {e}")
             return False
             
-    def _convert_wav_to_mp3(self, wav_file, output_mp3, original_mp3):
+    def _convert_wav_to_mp3(self, wav_file, output_mp3, original_mp3, preserve_art=False):
         """Convert WAV to MP3 while preserving metadata from original MP3."""
         try:
             # Get metadata from original file
             original_audio = MP3(original_mp3)
             tags = {}
             for key in original_audio.keys():
-                if key != 'APIC:':  # Skip album art for simplicity
-                    tags[key] = original_audio[key]
+                if not preserve_art and key.startswith('APIC'):
+                    continue
+                tags[key] = original_audio[key]
             
             # Convert WAV to MP3
             if shutil.which('ffmpeg'):  # Use ffmpeg if available
@@ -1351,9 +1393,18 @@ class DJMusicCleaner:
             print(f"   ❌ MusicBrainz not available")
             return None
         
+        cache_key = None
         try:
             audio = MP3(filepath)
             title = str(audio.get('TIT2', '')).strip() if 'TIT2' in audio else ''
+            artist = str(audio.get('TPE1', '')).strip() if 'TPE1' in audio else ''
+            duration = int(audio.info.length) if getattr(audio, 'info', None) else 0
+
+            norm_title = self.clean_text(title).lower()
+            norm_artist = self.clean_text(artist).lower()
+            cache_key = (norm_title, norm_artist, round(duration))
+            if cache_key in self.lookup_cache:
+                return self.lookup_cache[cache_key]
             
             if not title or len(title) < 3:
                 title = Path(filepath).stem
@@ -1442,7 +1493,7 @@ class DJMusicCleaner:
                     if genre:
                         self.stats['genre_found'] += 1
                     
-                    return {
+                    match = {
                         'artist': artist_name,
                         'title': track_title,
                         'year': year,
@@ -1453,22 +1504,40 @@ class DJMusicCleaner:
                         'confidence': score / 100,
                         'method': 'text_search'
                     }
-            
+                    self.lookup_cache[cache_key] = match
+                    return match
+
             print(f"   ❌ No matches above threshold")
-            
+            self.lookup_cache[cache_key] = None
+
         except Exception as e:
             print(f"   ❌ Text search error: {str(e)}")
-        
+            if cache_key is not None:
+                self.lookup_cache[cache_key] = None
+
         return None
 
     def identify_by_fingerprint(self, filepath):
         """Enhanced fingerprinting with album lookup"""
         if not ACOUSTID_AVAILABLE or not self.acoustid_api_key:
             return None
-        
+
+        cache_key = None
         try:
+            audio = MP3(filepath)
+            title_tag = str(audio.get('TIT2', '')).strip() if 'TIT2' in audio else ''
+            artist_tag = str(audio.get('TPE1', '')).strip() if 'TPE1' in audio else ''
+            duration = int(audio.info.length) if getattr(audio, 'info', None) else 0
+            cache_key = (
+                self.clean_text(title_tag).lower(),
+                self.clean_text(artist_tag).lower(),
+                round(duration),
+            )
+            if cache_key in self.lookup_cache:
+                return self.lookup_cache[cache_key]
+
             print(f"   🎵 Fingerprinting audio...")
-            
+
             for score, recording_id, title, artist in acoustid.match(self.acoustid_api_key, filepath):
                 if score > 0.75:
                     year = None
@@ -1503,7 +1572,7 @@ class DJMusicCleaner:
                     if genre:
                         self.stats['genre_found'] += 1
                     
-                    return {
+                    match = {
                         'artist': artist,
                         'title': title,
                         'year': year,
@@ -1513,10 +1582,14 @@ class DJMusicCleaner:
                         'method': 'fingerprint',
                         'recording_id': recording_id
                     }
-            
+                    self.lookup_cache[cache_key] = match
+                    return match
+
         except Exception as e:
             print(f"   ❌ Fingerprint error: {e}")
-        
+            if cache_key is not None:
+                self.lookup_cache[cache_key] = None
+
         return None
 
     def enhance_metadata_online(self, filepath):
@@ -1635,10 +1708,10 @@ class DJMusicCleaner:
             print(f"   ❌ Error generating filename: {e}")
             return "Unknown Track"
     
-    def process_folder(self, input_folder, output_folder=None, enhance_online=False, include_year_in_filename=False, 
-                      dj_analysis=True, analyze_quality=True, detect_key=True, detect_cues=True, calculate_energy=True, 
+    def process_folder(self, input_folder, output_folder=None, enhance_online=False, include_year_in_filename=False,
+                      dj_analysis=True, analyze_quality=True, detect_key=True, detect_cues=True, calculate_energy=True,
                       normalize_loudness=False, target_lufs=-14.0, rekordbox_xml=None, export_xml=False,
-                      generate_report=True, high_quality_only=False, detailed_report=True):
+                      generate_report=True, high_quality_only=False, detailed_report=True, preserve_art=False):
         """Process a folder of MP3 files with enhanced DJ metadata analysis.
         
         Args:
@@ -1659,6 +1732,7 @@ class DJMusicCleaner:
 
             high_quality_only: Only move high-quality (320kbps+) files to output folder
             detailed_report: Generate detailed per-file changes report
+            preserve_art: Preserve album art when rewriting files
         """
         start_time = time.time()
         
@@ -1894,7 +1968,7 @@ class DJMusicCleaner:
                     if normalize_loudness and not high_quality_only:
                         try:
                             print(f"   🔊 Normalizing loudness to {target_lufs} LUFS...")
-                            self.normalize_loudness(input_file, target_lufs=target_lufs)
+                            self.normalize_loudness(input_file, target_lufs=target_lufs, preserve_art=preserve_art)
                             file_info['changes'].append(f"Normalized loudness to {target_lufs} LUFS")
                         except Exception as e:
                             print(f"   ⚠️ Loudness normalization error: {e}")
@@ -2111,6 +2185,8 @@ def main():
     
     # Set up command line argument parser
     parser = argparse.ArgumentParser(description="DJ Music Cleaner - Ultimate DJ Library Management Tool")
+    parser.add_argument("--verbose", action="store_true", help="Enable debug logging")
+    parser.add_argument("--quiet", action="store_true", help="Only show warnings and errors")
     parser.add_argument("-i", "--input", help="Input folder containing MP3 files", required=True)
     parser.add_argument("-o", "--output", help="Output folder for cleaned files (optional, uses input folder if not specified)")
     parser.add_argument(
@@ -2142,9 +2218,14 @@ def main():
     adv_group.add_argument("--no-report", help="Disable HTML report generation", action="store_true")
     adv_group.add_argument("--detailed-report", help="Generate detailed per-file changes report", action="store_true", default=True)
     adv_group.add_argument("--no-detailed-report", help="Disable detailed per-file changes report", action="store_true")
+    adv_group.add_argument("--preserve-art", help="Preserve album art when normalizing loudness", action="store_true")
     
     # Parse arguments
     args = parser.parse_args()
+    if args.verbose:
+        logging.getLogger().setLevel(logging.DEBUG)
+    elif args.quiet:
+        logging.getLogger().setLevel(logging.WARNING)
     
     # Get API key from CLI arg or environment variable
     ACOUSTID_API_KEY = args.api_key or os.getenv("ACOUSTID_API_KEY")
@@ -2210,7 +2291,8 @@ def main():
         generate_report=args.report and not args.no_report,
 
         high_quality_only=args.high_quality,
-        detailed_report=args.detailed_report and not args.no_detailed_report
+        detailed_report=args.detailed_report and not args.no_detailed_report,
+        preserve_art=args.preserve_art
     )
     
     print(f"\n✅ Processed {len(processed_files)} files")
