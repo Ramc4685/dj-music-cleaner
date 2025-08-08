@@ -200,40 +200,41 @@ class DJReportManager:
         print(f"📝 Detailed changes report saved: {report_path}")
         return report_path
     
-    def generate_duplicates_report(self):
-        """Generate a report of duplicate files"""
-        if not self.duplicate_files:
+    def save_duplicates_report(self, duplicates):
+        """Save a report of duplicate files"""
+        if not duplicates:
             return None
-            
+
+        # Store duplicates for later use
+        self.duplicate_files = duplicates
+
         report_path = os.path.join(self.reports_dir, f"duplicate_files_{self.session_timestamp}.txt")
-        
+
         with open(report_path, 'w', encoding='utf-8') as f:
             f.write("DJ MUSIC CLEANER - DUPLICATE FILES REPORT\n")
             f.write("=" * 60 + "\n")
             f.write(f"Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n\n")
-            f.write(f"The following {len(self.duplicate_files)} potential duplicates were found:\n\n")
-            
+            f.write(f"The following {len(duplicates)} potential duplicates were found:\n\n")
+
             # Group duplicates by original file
             duplicates_by_original = {}
-            for dup_info in self.duplicate_files:
+            for dup_info in duplicates:
                 original = dup_info['original']
-                if original not in duplicates_by_original:
-                    duplicates_by_original[original] = []
-                duplicates_by_original[original].append(dup_info)
-            
+                duplicates_by_original.setdefault(original, []).append(dup_info)
+
             # Write grouped duplicates
-            for i, (original, duplicates) in enumerate(duplicates_by_original.items(), 1):
+            for i, (original, group) in enumerate(duplicates_by_original.items(), 1):
                 f.write(f"{i}. Original: {os.path.basename(original)}\n")
                 f.write(f"   Path: {original}\n")
-                f.write(f"   Potential duplicates ({len(duplicates)}):\n")
-                
-                for j, dup in enumerate(duplicates, 1):
+                f.write(f"   Potential duplicates ({len(group)}):\n")
+
+                for j, dup in enumerate(group, 1):
                     f.write(f"   {j}. {os.path.basename(dup['duplicate'])}\n")
                     f.write(f"      Path: {dup['duplicate']}\n")
                     f.write(f"      Similarity: {dup['similarity_score']:.2f}%\n")
-                
+
                 f.write("\n")
-                
+
         print(f"📝 Duplicates report saved: {report_path}")
         return report_path
     
