@@ -1,0 +1,19 @@
+# Core dependencies
+mutagen>=1.47
+musicbrainzngs>=0.7
+pyacoustid>=1.2.2
+
+# Optional dependencies for DJ-specific features
+librosa>=0.10
+numpy>=1.24
+pyloudnorm>=0.1.1
+soundfile>=0.12
+tqdm>=4.66
+python-dotenv>=1.0.0
+
+# Optional: Highly recommended for key detection
+# Note: May require manual installation
+# pip install git+https://github.com/EvanPurkhiser/keyfinder-python.git
+
+# Optional dependency for Rekordbox playlist creation
+# pyrekordbox>=0.1.0

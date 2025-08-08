@@ -1,0 +1,48 @@
+[project]
+name = "dj-music-cleaner"
+version = "1.0.0"
+description = "DJ library cleaner and analyzer for Rekordbox & MP3 collections"
+readme = "README.md"
+requires-python = ">=3.9"
+license = "MIT"
+authors = [{ name = "RamC Venkatasamy" }]
+keywords = ["dj", "audio", "mp3", "metadata", "rekordbox"]
+classifiers = [
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3 :: Only",
+  "Operating System :: OS Independent",
+  "Topic :: Multimedia :: Sound/Audio"
+]
+
+# Minimal hard deps to run (others are optional via extras)
+dependencies = [
+  "mutagen>=1.46",
+  "musicbrainzngs>=0.7"
+]
+
+[project.optional-dependencies]
+analysis = ["librosa>=0.10", "numpy>=1.24"]
+loudness = ["pyloudnorm>=0.1.1", "soundfile>=0.12"]
+online = ["pyacoustid>=1.2.2"]
+rekordbox = ["pyrekordbox>=0.1.7"]
+ui = ["tqdm>=4.66"]
+full = [
+  "librosa>=0.10",
+  "numpy>=1.24",
+  "pyloudnorm>=0.1.1",
+  "soundfile>=0.12",
+  "pyacoustid>=1.2.2",
+  "pyrekordbox>=0.1.7",
+  "tqdm>=4.66"
+]
+
+# CLI entrypoint: installs a `djcleaner` command
+[project.scripts]
+djcleaner = "djmusiccleaner.dj_music_cleaner:cli_main"
+
+[project.urls]
+Homepage = "https://github.com/ramc46/dj-music-cleaner"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["djmusiccleaner*"]
