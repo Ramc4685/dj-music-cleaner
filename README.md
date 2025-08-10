@@ -117,8 +117,6 @@ python dj_music_cleaner.py --input /path/to/music --output /path/to/clean --high
 --api-key API_KEY    AcoustID API key for enhanced identification (optional if ACOUSTID_API_KEY env var is set)
 --year               Include year in filename
 --online             Enable online metadata enhancement (MusicBrainz/AcoustID)
---verbose            Enable debug logging
---quiet              Suppress non-warning output
 ```
 
 #### DJ Features
@@ -141,7 +139,6 @@ python dj_music_cleaner.py --input /path/to/music --output /path/to/clean --high
 --priorities         Show metadata completion priorities
 --report             Generate HTML report (default: enabled)
 --detailed-report    Generate detailed per-file changes report (default: enabled)
---preserve-art       Preserve album art during loudness normalization
 ```
 
 ### Examples
@@ -198,6 +195,52 @@ djcleaner -i /path/to/music --online
 ```bash
 python dj_music_cleaner.py --input /path/to/music --priorities
 ```
+
+## High-Quality Mode
+
+When using the `--high-quality` flag, the tool operates in **strict mode**:
+
+- **Quality Analysis First**: Each file's audio quality (bitrate, sample rate) is analyzed before any processing
+- **Skip Low-Quality Files**: Files below 320kbps and 44.1kHz are completely skipped:
+  - ❌ No tag modifications or cleaning
+  - ❌ No online metadata enhancement
+  - ❌ No DJ analysis (key, cues, energy)
+  - ❌ No copying to output folder
+  - ✅ Only logged in reports under "Skipped (Low Quality)"
+- **Process High-Quality Files**: Files ≥320kbps and ≥44.1kHz get full processing:
+  - ✅ Complete metadata cleaning and enhancement
+  - ✅ All DJ analysis features
+  - ✅ Renamed and copied to output folder
+
+This ensures your output folder contains only professional-quality files while preserving the original low-quality files unchanged.
+
+```bash
+# High-quality mode example
+djcleaner -i /path/to/mixed_quality_music -o /path/to/hq_only --high-quality --online
+```
+
+## API Key Configuration
+
+For online metadata enhancement, you need an AcoustID API key:
+
+### Option 1: Command Line (temporary use)
+```bash
+djcleaner -i /path/to/music --online --api-key YOUR_ACOUSTID_KEY
+```
+
+### Option 2: Environment Variable (recommended)
+```bash
+export ACOUSTID_API_KEY="YOUR_ACOUSTID_KEY"
+djcleaner -i /path/to/music --online
+```
+
+### Option 3: .env File (development)
+```bash
+echo "ACOUSTID_API_KEY=YOUR_ACOUSTID_KEY" > .env
+djcleaner -i /path/to/music --online
+```
+
+**Error Handling**: If `--online` is used without an API key, the tool will show a clear error and exit.
 
 ## Metadata Formats
 

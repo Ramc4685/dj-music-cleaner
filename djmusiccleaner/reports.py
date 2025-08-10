@@ -10,7 +10,7 @@ import shutil
 
 class DJReportManager:
     """Manages detailed reports for DJ music processing"""
-    
+
     def __init__(self, base_dir=None):
         """Initialize the report manager with base directory"""
         self.base_dir = base_dir or os.getcwd()
@@ -23,17 +23,16 @@ class DJReportManager:
         self.low_quality_files = []
         self.duplicate_files = []
         self.changes_log = []
-        
     def ensure_reports_dir(self):
         """Ensure reports directory exists"""
         if not os.path.exists(self.reports_dir):
             os.makedirs(self.reports_dir)
             print(f"📁 Created reports directory: {self.reports_dir}")
-    
+
     def get_processed_files_db_path(self):
         """Get path to the processed files database"""
         return os.path.join(self.reports_dir, "processed_files.json")
-    
+
     def load_processed_files_db(self):
         """Load previously processed files database"""
         db_path = self.get_processed_files_db_path()
@@ -130,7 +129,6 @@ class DJReportManager:
                 f.write(f"   Quality: {file_info['quality_info']['bitrate_kbps']}kbps, {file_info['quality_info']['sample_rate_khz']}kHz\n")
                 f.write(f"   Length: {file_info['quality_info']['length']}\n")
                 f.write("\n")
-                
         print(f"📝 Low quality files report saved: {report_path}")
         return report_path
     
@@ -140,7 +138,7 @@ class DJReportManager:
             return None
             
         report_path = os.path.join(self.reports_dir, f"changes_report_{self.session_timestamp}.txt")
-        
+
         with open(report_path, 'w', encoding='utf-8') as f:
             f.write("DJ MUSIC CLEANER - DETAILED CHANGES REPORT\n")
             f.write("=" * 60 + "\n")
@@ -151,36 +149,31 @@ class DJReportManager:
                 f.write(f"   Path: {log_entry['file_path']}\n")
                 f.write(f"   Timestamp: {log_entry['timestamp']}\n")
                 f.write(f"   Changes:\n")
-                
                 # Write detailed changes
                 changes = log_entry['changes']
-                
+
                 # Metadata changes
                 if 'metadata_changed' in changes and changes['metadata_changed']:
                     f.write(f"   - Metadata changes:\n")
                     for field, values in changes.get('changes', {}).items():
                         if 'original' in values and 'new' in values:
                             f.write(f"     * {field.capitalize()}: '{values['original']}' → '{values['new']}'\n")
-                
                 # Cleaning actions
                 if 'cleaning_actions' in changes and changes['cleaning_actions']:
                     f.write(f"   - Cleaning actions:\n")
                     for action in changes['cleaning_actions']:
                         f.write(f"     * {action}\n")
-                
                 # Online enhancement
                 if 'enhanced' in changes and changes['enhanced']:
                     f.write(f"   - Enhanced with online data: Yes\n")
                     if 'source' in changes:
                         f.write(f"     * Source: {changes['source']}\n")
-                
                 # Quality analysis
                 if 'quality_info' in changes:
                     quality = changes['quality_info']
                     f.write(f"   - Quality analysis: {quality.get('quality_rating', 'Unknown')}\n")
                     f.write(f"     * Bitrate: {quality.get('bitrate_kbps', 0)}kbps\n")
                     f.write(f"     * Sample rate: {quality.get('sample_rate_khz', 0)}kHz\n")
-                
                 # DJ-specific analysis
                 if 'dj_analysis' in changes:
                     dj_info = changes['dj_analysis']
@@ -190,7 +183,6 @@ class DJReportManager:
                         f.write(f"   - Energy rating: {dj_info['energy']}/10\n")
                     if 'cue_points' in dj_info:
                         f.write(f"   - Cue points detected: {len(dj_info['cue_points'])}\n")
-                
                 # Normalization
                 if 'normalized' in changes and changes['normalized']:
                     f.write(f"   - Loudness normalized: {changes.get('target_lufs', 'Unknown')} LUFS\n")
@@ -200,58 +192,59 @@ class DJReportManager:
         print(f"📝 Detailed changes report saved: {report_path}")
         return report_path
     
-    def generate_duplicates_report(self):
+    def generate_duplicates_report(self, duplicates=None):
         """Generate a report of duplicate files"""
-        if not self.duplicate_files:
+        # Use passed duplicates or fall back to stored duplicate_files
+        duplicate_data = duplicates if duplicates is not None else self.duplicate_files
+        if not duplicate_data:
             return None
-            
+
+        # Store duplicates for later use
+        self.duplicate_files = duplicates
+
         report_path = os.path.join(self.reports_dir, f"duplicate_files_{self.session_timestamp}.txt")
-        
+
         with open(report_path, 'w', encoding='utf-8') as f:
             f.write("DJ MUSIC CLEANER - DUPLICATE FILES REPORT\n")
             f.write("=" * 60 + "\n")
             f.write(f"Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n\n")
-            f.write(f"The following {len(self.duplicate_files)} potential duplicates were found:\n\n")
-            
-            # Group duplicates by original file
-            duplicates_by_original = {}
-            for dup_info in self.duplicate_files:
-                original = dup_info['original']
-                if original not in duplicates_by_original:
-                    duplicates_by_original[original] = []
-                duplicates_by_original[original].append(dup_info)
-            
-            # Write grouped duplicates
-            for i, (original, duplicates) in enumerate(duplicates_by_original.items(), 1):
-                f.write(f"{i}. Original: {os.path.basename(original)}\n")
-                f.write(f"   Path: {original}\n")
-                f.write(f"   Potential duplicates ({len(duplicates)}):\n")
-                
-                for j, dup in enumerate(duplicates, 1):
-                    f.write(f"   {j}. {os.path.basename(dup['duplicate'])}\n")
-                    f.write(f"      Path: {dup['duplicate']}\n")
-                    f.write(f"      Similarity: {dup['similarity_score']:.2f}%\n")
+            f.write(f"The following {len(duplicate_data)} potential duplicate groups were found:\n\n")
+            # Write duplicate groups
+            for i, dup_group in enumerate(duplicate_data, 1):
+                f.write(f"{i}. Duplicate Group #{i} ({dup_group['type']})\n")
+                f.write(f"   Match Type: {dup_group.get('match_on', 'unknown')}\n")
+                if 'similarity' in dup_group:
+                    f.write(f"   Similarity: {dup_group['similarity']:.2f}\n")
+                f.write(f"   Files in group ({len(dup_group['tracks'])}):\n")
+                for j, track in enumerate(dup_group['tracks'], 1):
+                    track_path = str(track['path'])
+                    track_size = track.get('size', 0) // 1024  # Convert to KB
+                    f.write(f"   {j}. {os.path.basename(track_path)}\n")
+                    f.write(f"      Path: {track_path}\n")
+                    f.write(f"      Size: {track_size} KB\n")
+                    if track.get('artist'):
+                        f.write(f"      Artist: {track['artist']}\n")
+                    if track.get('title'):
+                        f.write(f"      Title: {track['title']}\n")
                 
                 f.write("\n")
-                
+
         print(f"📝 Duplicates report saved: {report_path}")
         return report_path
     
     def generate_session_summary(self, output_folder=None):
         """Generate a summary of the session"""
         summary_path = os.path.join(self.reports_dir, f"session_summary_{self.session_timestamp}.txt")
-        
+
         with open(summary_path, 'w', encoding='utf-8') as f:
             f.write("DJ MUSIC CLEANER - SESSION SUMMARY\n")
             f.write("=" * 60 + "\n")
             f.write(f"Session: {self.session_timestamp}\n")
             f.write(f"Completed: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n\n")
-            
             f.write(f"Files processed: {len(self.processed_files)}\n")
             f.write(f"High quality files moved: {len([f for f in self.processed_files if f.get('is_high_quality', False)])}\n")
             f.write(f"Low quality files (not moved): {len(self.low_quality_files)}\n")
             f.write(f"Potential duplicates found: {len(self.duplicate_files)}\n\n")
-            
             if output_folder:
                 f.write(f"Clean files location: {output_folder}\n\n")
             
@@ -262,6 +255,5 @@ class DJReportManager:
                 f.write(f"- Detailed changes report\n")
             if self.duplicate_files:
                 f.write(f"- Duplicates report\n")
-        
         print(f"📝 Session summary saved: {summary_path}")
         return summary_path
