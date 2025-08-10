@@ -166,8 +166,14 @@ class DJMusicCleaner:
     def setup_musicbrainz(self):
         """Initialize MusicBrainz API"""
         if MUSICBRAINZ_AVAILABLE:
-            musicbrainzngs.set_useragent("DJMusicCleaner", "1.0", "dj@example.com")
+            # Use a real contact email to avoid additional throttling
+            musicbrainzngs.set_useragent(
+                "DJMusicCleaner", "1.0", "djmusiccleaner@users.noreply.github.com"
+            )
+            # Respect default MusicBrainz rate limits
             musicbrainzngs.set_rate_limit(limit_or_interval=1.0, new_requests=1)
+            # Ensure requests do not hang forever
+            musicbrainzngs.set_timeout(10)
             print("🌐 MusicBrainz API initialized")
     
     def sanitize_tag_value(self, value):
@@ -419,6 +425,8 @@ class DJMusicCleaner:
             
             print(f"   🎧 Quality: {quality_message} ({bitrate_kbps}kbps, {sample_rate_khz}kHz)")
             
+            quality_text = f"QUALITY: {bitrate_kbps}kbps, {sample_rate_khz}kHz, {quality_rating}"
+
             quality_info = {
                 'bitrate_kbps': bitrate_kbps,
                 'sample_rate_khz': sample_rate_khz,
@@ -1402,8 +1410,13 @@ class DJMusicCleaner:
             '.com', '.in', '.dev', '.net', '.org', '.co',
             'www.', 'http', 'download', 'free'
         ]
-        
+
         return any(indicator in text_lower for indicator in pollution_indicators)
+
+    def sanitize_tag_value(self, value):
+        """Sanitize a tag value and return it if still meaningful."""
+        cleaned = self.clean_text(str(value))
+        return cleaned if cleaned else None
 
     def extract_year_from_date(self, date_string):
         """Extract year from various date formats"""
@@ -1428,9 +1441,10 @@ class DJMusicCleaner:
                 audio.add_tags()
             
             if 'COMM::eng' in audio:
-                current = str(audio['COMM::eng'])
-                if text not in current:  # Avoid duplicates
-                    audio['COMM::eng'] = COMM(encoding=3, lang='eng', desc='', text=current + "\n" + text)
+                current_comm = audio['COMM::eng']
+                current_text = current_comm.text[0] if current_comm.text else ""
+                if text not in current_text:  # Avoid duplicates
+                    current_comm.text[0] = f"{current_text}\n{text}" if current_text else text
             else:
                 audio['COMM::eng'] = COMM(encoding=3, lang='eng', desc='', text=text)
             audio.save()
@@ -1652,6 +1666,13 @@ class DJMusicCleaner:
         
         try:
             audio = MP3(filepath)
+            # Get the duration of the local file in seconds
+            file_duration = None
+            try:
+                file_duration = int(audio.info.length)
+            except Exception:
+                pass
+
             title = str(audio.get('TIT2', '')).strip() if 'TIT2' in audio else ''
             file_duration = audio.info.length  # Get file duration for filtering
             
@@ -1731,7 +1752,15 @@ class DJMusicCleaner:
                     print(f"   🏷️ Label: {label}")
                 print(f"   📊 Score: {score}")
                 
-                if score > 70:
+                duration_ok = True
+                if duration:
+                    try:
+                        if abs(int(duration) - int(file_duration)) > 5:
+                            duration_ok = False
+                    except Exception:
+                        pass
+
+                if score > 70 and duration_ok:
                     print(f"   ✅ Accepting match with score {score}")
                     
                     self.stats['text_search_hits'] += 1
@@ -1769,28 +1798,32 @@ class DJMusicCleaner:
         try:
             print(f"   🎵 Fingerprinting audio...")
             
-            for score, recording_id, title, artist in acoustid.match(self.acoustid_api_key, filepath):
+            for score, recording_id, title, artist in acoustid.match(
+                self.acoustid_api_key, filepath, meta="recordings releases recordingids"
+            ):
                 if score > 0.75:
                     year = None
                     album = None
-                    
+
                     try:
                         if MUSICBRAINZ_AVAILABLE and recording_id:
-                            recording_info = musicbrainzngs.get_recording_by_id(
-                                recording_id, 
+                            recording_info = self._mb_request(
+                                musicbrainzngs.get_recording_by_id,
+                                recording_id,
                                 includes=['releases']
                             )
-                            
-                            recording_data = recording_info['recording']
-                            if 'release-list' in recording_data:
-                                for release in recording_data['release-list']:
-                                    if 'date' in release and not year:
-                                        year = self.extract_year_from_date(release['date'])
-                                    if 'title' in release and not album:
-                                        album = self.clean_text(release['title'])
-                                    if year and album:
-                                        break
-                    except:
+
+                            if recording_info and 'recording' in recording_info:
+                                recording_data = recording_info['recording']
+                                if 'release-list' in recording_data:
+                                    for release in recording_data['release-list']:
+                                        if 'date' in release and not year:
+                                            year = self.extract_year_from_date(release['date'])
+                                        if 'title' in release and not album:
+                                            album = self.clean_text(release['title'])
+                                        if year and album:
+                                            break
+                    except Exception:
                         pass
                     
                     genre = self.determine_genre(artist, title, album or '')
@@ -1937,11 +1970,12 @@ class DJMusicCleaner:
                 name = artist
             else:
                 return "Unknown Track.mp3"
-            
+
             # Sanitize for filesystem
             name = re.sub(r'[<>:"/\\|?*]', '', name)
+            name = re.sub(r'\s+', ' ', name).strip().rstrip('.')
             name = name[:120]  # Slightly longer limit for year
-            
+
             return name
         except Exception as e:
             print(f"   ❌ Error generating filename: {e}")
@@ -2175,10 +2209,12 @@ class DJMusicCleaner:
                         if tag.startswith('T') or tag.startswith('COMM'):
                             file_info['cleaned_metadata'][tag] = str(audio[tag])
                     
+                    run_for_this_file = (not high_quality_only) or file_info['is_high_quality']
+
                     # Perform DJ-specific analysis
-                    if dj_analysis:
+                    if dj_analysis and run_for_this_file:
                         # Detect musical key
-                        if detect_key and not high_quality_only:
+                        if detect_key:
                             try:
                                 key = self.detect_musical_key(input_file)
                                 if key:
@@ -2188,9 +2224,9 @@ class DJMusicCleaner:
                                     self.stats['key_found'] += 1
                             except Exception as e:
                                 print(f"   ⚠️ Key detection error: {e}")
-                        
+
                         # Detect cue points
-                        if detect_cues and not high_quality_only:
+                        if detect_cues:
                             try:
                                 cues = self.detect_cue_points(input_file)
                                 if cues:
@@ -2207,9 +2243,9 @@ class DJMusicCleaner:
                                     file_info['changes'].append(f"Detected cue points: {cue_text}")
                             except Exception as e:
                                 print(f"   ⚠️ Cue detection error: {e}")
-                        
+
                         # Calculate energy rating
-                        if calculate_energy and not high_quality_only:
+                        if calculate_energy:
                             try:
                                 energy_result = self.calculate_energy_rating(input_file)
                                 if energy_result:
@@ -2221,9 +2257,9 @@ class DJMusicCleaner:
                                     file_info['changes'].append(f"Energy rating: {energy}/10")
                             except Exception as e:
                                 print(f"   ⚠️ Energy calculation error: {e}")
-                    
+
                     # Normalize loudness if requested
-                    if normalize_loudness and not high_quality_only:
+                    if normalize_loudness and run_for_this_file:
                         try:
                             print(f"   🔊 Normalizing loudness to {target_lufs} LUFS...")
                             self.normalize_loudness(input_file, target_lufs=target_lufs)
@@ -2441,10 +2477,12 @@ class DJMusicCleaner:
             f.write("File Changes:\n")
             f.write("-" * 30 + "\n")
             for file_info in processed_files:
-                if file_info['original'] != file_info['cleaned']:
-                    f.write(f"RENAMED: {file_info['original']} → {file_info['cleaned']}\n")
-                    if file_info['enhanced']:
-                        f.write(f"  Enhanced: Yes\n")
+                input_path = file_info.get('input_path')
+                output_path = file_info.get('output_path', input_path)
+                if input_path and output_path and input_path != output_path:
+                    f.write(f"RENAMED: {input_path} → {output_path}\n")
+                    if file_info.get('enhanced'):
+                        f.write("  Enhanced: Yes\n")
             
             if self.stats['manual_review_needed']:
                 f.write(f"\nManual Review Needed:\n")

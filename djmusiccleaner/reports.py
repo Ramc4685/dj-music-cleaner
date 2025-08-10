@@ -206,9 +206,12 @@ class DJReportManager:
         duplicate_data = duplicates if duplicates is not None else self.duplicate_files
         if not duplicate_data:
             return None
-            
+
+        # Store duplicates for later use
+        self.duplicate_files = duplicates
+
         report_path = os.path.join(self.reports_dir, f"duplicate_files_{self.session_timestamp}.txt")
-        
+
         with open(report_path, 'w', encoding='utf-8') as f:
             f.write("DJ MUSIC CLEANER - DUPLICATE FILES REPORT\n")
             f.write("=" * 60 + "\n")
@@ -237,7 +240,7 @@ class DJReportManager:
                         f.write(f"      Title: {track['title']}\n")
                 
                 f.write("\n")
-                
+
         print(f"📝 Duplicates report saved: {report_path}")
         return report_path
     
