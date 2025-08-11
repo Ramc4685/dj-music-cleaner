@@ -309,6 +309,113 @@ class DJMusicCleaner:
             cand = f"{base} ({n}){ext}"
             n += 1
         return cand
+        
+    def _safe_save(self, audio, filepath, backup=True, dry_run=False):
+        """Centralized method to safely save ID3 tags to audio files.
+        
+        Args:
+            audio: mutagen audio object to save
+            filepath: path to the audio file
+            backup: if True, create a .bak backup before first write
+            dry_run: if True, don't actually write changes
+            
+        Returns:
+            bool: True if file was saved (or would have been in dry_run), False otherwise
+        """
+        if dry_run:
+            # In dry-run mode, just track the would-be change
+            if 'files_would_change' not in self.stats:
+                self.stats['files_would_change'] = 0
+            self.stats['files_would_change'] += 1
+            return True
+            
+        # Create backup if requested and doesn't exist
+        backup_path = f"{filepath}.bak"
+        if backup and not os.path.exists(backup_path):
+            try:
+                shutil.copy2(filepath, backup_path)
+                if 'backups_created' not in self.stats:
+                    self.stats['backups_created'] = 0
+                self.stats['backups_created'] += 1
+            except Exception as e:
+                print(f"⚠️ Could not create backup of {filepath}: {e}")
+                return False
+                
+        # Save the actual file
+        try:
+            audio.save()
+            if 'files_saved' not in self.stats:
+                self.stats['files_saved'] = 0
+            self.stats['files_saved'] += 1
+            return True
+        except Exception as e:
+            print(f"❌ Error saving {filepath}: {e}")
+            if 'save_errors' not in self.stats:
+                self.stats['save_errors'] = 0
+            self.stats['save_errors'] += 1
+            return False
+            
+    def write_id3(self, filepath, tag_dict, dry_run=False):
+        """Centralized method to write ID3 tags to an audio file.
+        
+        Args:
+            filepath: Path to the audio file
+            tag_dict: Dictionary of ID3 tags to write, e.g. {'title': 'Song Title', 'artist': 'Artist Name'}
+            dry_run: If True, don't actually write changes
+            
+        Returns:
+            bool: True if tags were written successfully, False otherwise
+        """
+        try:
+            # Load the audio file
+            try:
+                audio = MP3(filepath)
+            except Exception as e:
+                print(f"❌ Error loading {filepath}: {e}")
+                return False
+                
+            # Ensure ID3 tags exist
+            if audio.tags is None:
+                audio.add_tags()
+                
+            # Map of common tag names to ID3 frame classes
+            tag_map = {
+                'title': ('TIT2', TIT2),
+                'artist': ('TPE1', TPE1),
+                'album': ('TALB', TALB),
+                'year': ('TDRC', TDRC),
+                'genre': ('TCON', TCON),
+                'bpm': ('TBPM', TBPM),
+                'key': ('TKEY', TKEY),
+                'comment': ('COMM::eng', COMM)
+            }
+            
+            # Apply the tags
+            changes_made = False
+            for key, value in tag_dict.items():
+                if key in tag_map:
+                    tag_id, tag_class = tag_map[key]
+                    
+                    # Handle special case for comments
+                    if tag_id == 'COMM::eng':
+                        audio[tag_id] = COMM(encoding=3, lang='eng', desc='', text=value)
+                    else:
+                        audio[tag_id] = tag_class(encoding=3, text=value)
+                    changes_made = True
+                else:
+                    # Handle raw ID3 tags (when ID3 frame ID is provided directly)
+                    if key.startswith('T') and len(key) == 4:
+                        audio[key] = tag_class(encoding=3, text=value)
+                        changes_made = True
+            
+            # Only save if changes were made
+            if changes_made:
+                return self._safe_save(audio, filepath, backup=True, dry_run=dry_run)
+            return True
+            
+        except Exception as e:
+            print(f"❌ Error writing tags to {filepath}: {e}")
+            return False
 
     def _tokenize(self, s):
         """Helper for tokenizing strings for similarity comparison"""
@@ -565,10 +672,10 @@ class DJMusicCleaner:
                 'C#m':'12A','G#m':'1A','D#m':'2A','A#m':'3A','Fm':'4A','Cm':'5A','Gm':'6A','Dm':'7A'
             }.get(key, 'Unknown')
 
-            audio = MP3(filepath)
-            audio['TKEY'] = TKEY(encoding=3, text=key)
+            # Use centralized write_id3 method to write the key
+            tag_dict = {'key': key}
+            self.write_id3(filepath, tag_dict, dry_run=False)
             self.add_to_comments(filepath, f"Camelot key: {camelot}")
-            audio.save()
             print(f"   Detected key: {key} (Camelot: {camelot})")
             self.stats['key_found'] += 1
             return key
@@ -714,7 +821,7 @@ class DJMusicCleaner:
             else:
                 audio['COMM::eng'] = COMM(encoding=3, lang='eng', desc='', text=energy_comment)
 
-            audio.save()
+            self._safe_save(audio, filepath, backup=True, dry_run=False)
 
             return {'energy_rating': round(energy, 1)}
         except Exception as e:
@@ -1080,25 +1187,27 @@ class DJMusicCleaner:
 
                 # Apply metadata
                 audio = MP3(filepath)
-                modified = False
+                tag_dict = {}
 
                 # Apply BPM if missing
                 if ('TBPM' not in audio or not str(audio.get('TBPM', '')).strip()) and rb_data['bpm']:
-                    audio['TBPM'] = TBPM(encoding=3, text=str(rb_data['bpm']))
+                    tag_dict['bpm'] = str(rb_data['bpm'])
                     print(f"   🎛️ Applied Rekordbox BPM: {rb_data['bpm']}")
-                    modified = True
 
                 # Apply Key if missing
                 if ('TKEY' not in audio or not str(audio.get('TKEY', '')).strip()) and rb_data['key']:
-                    audio['TKEY'] = TKEY(encoding=3, text=rb_data['key'])
+                    tag_dict['key'] = rb_data['key']
                     print(f"   🎛️ Applied Rekordbox Key: {rb_data['key']}")
-                    modified = True
 
                 # Apply Genre if missing
                 if ('TCON' not in audio or not str(audio.get('TCON', '')).strip()) and rb_data['genre']:
-                    audio['TCON'] = TCON(encoding=3, text=rb_data['genre'])
+                    tag_dict['genre'] = rb_data['genre']
                     print(f"   🎛️ Applied Rekordbox Genre: {rb_data['genre']}")
-                    modified = True
+                    
+                # Write tags if any were set
+                modified = bool(tag_dict)
+                if modified:
+                    self.write_id3(filepath, tag_dict, dry_run=False)
 
                 # Add cue points info to comments if available
                 if rb_data['cue_points']:
@@ -1327,7 +1436,7 @@ class DJMusicCleaner:
             new_audio = MP3(output_mp3)
             for key, value in tags.items():
                 new_audio[key] = value
-            new_audio.save()
+            self._safe_save(new_audio, output_mp3, backup=True, dry_run=False)
 
         except Exception as e:
             print(f"   ❌ Error converting WAV to MP3: {e}")
@@ -1432,10 +1541,6 @@ class DJMusicCleaner:
 
         return any(indicator in text_lower for indicator in pollution_indicators)
 
-    def sanitize_tag_value(self, value):
-        """Sanitize a tag value and return it if still meaningful."""
-        cleaned = self.clean_text(str(value))
-        return cleaned if cleaned else None
 
     def extract_year_from_date(self, date_string):
         """Extract year from various date formats"""
@@ -1466,16 +1571,14 @@ class DJMusicCleaner:
                     current_comm.text[0] = f"{current_text}\n{text}" if current_text else text
             else:
                 audio['COMM::eng'] = COMM(encoding=3, lang='eng', desc='', text=text)
-            audio.save()
-            return True
+            return self._safe_save(audio, filepath, backup=True, dry_run=False)
         except ID3NoHeaderError:
             # Create ID3 tags and try again
             try:
                 audio = MP3(filepath)
                 audio.add_tags()
                 audio['COMM::eng'] = COMM(encoding=3, lang='eng', desc='', text=text)
-                audio.save()
-                return True
+                return self._safe_save(audio, filepath, backup=True, dry_run=False)
             except Exception as e:
                 print(f"   Error creating ID3 tags and adding comments: {e}")
                 return False
@@ -1919,48 +2022,52 @@ class DJMusicCleaner:
 
                 updated_fields = []
 
+                # Prepare tag dictionary for centralized write
+                tag_dict = {}
+                
                 # Update basic fields with sanitization
                 if identified.get('artist'):
                     clean_artist = self.sanitize_tag_value(identified['artist'])
                     if clean_artist:
-                        audio['TPE1'] = TPE1(encoding=3, text=clean_artist)
+                        tag_dict['artist'] = clean_artist
                         updated_fields.append(f"artist: '{clean_artist}'")
 
                 if identified.get('title'):
                     clean_title = self.sanitize_tag_value(identified['title'])
                     if clean_title:
-                        audio['TIT2'] = TIT2(encoding=3, text=clean_title)
+                        tag_dict['title'] = clean_title
                         updated_fields.append(f"title: '{clean_title}'")
 
                 # Update year with safe parsing
                 if identified.get('year'):
                     parsed_year = self.parse_year_safely(identified['year'])
                     if parsed_year:
-                        audio['TDRC'] = TDRC(encoding=3, text=parsed_year)
+                        tag_dict['year'] = parsed_year
                         updated_fields.append(f"year: '{parsed_year}'")
 
                 # Update album
                 if identified.get('album'):
                     clean_album = self.sanitize_tag_value(identified['album'])
                     if clean_album:
-                        audio['TALB'] = TALB(encoding=3, text=clean_album)
+                        tag_dict['album'] = clean_album
                         updated_fields.append(f"album: '{clean_album}'")
 
                 # Enhanced genre mapping
                 inferred_genre = self.infer_genre_from_path_or_metadata(filepath, identified.get('genre', ''))
                 if inferred_genre:
-                    audio['TCON'] = TCON(encoding=3, text=inferred_genre)
+                    tag_dict['genre'] = inferred_genre
                     updated_fields.append(f"genre: '{inferred_genre}'")
 
                 # BPM policy: only set if missing
                 if identified.get('genre'):
                     estimated_bpm = self.estimate_bpm_from_genre(identified['genre'])
                     if estimated_bpm and self.should_set_bpm(audio, estimated_bpm):
-                        audio['TBPM'] = TBPM(encoding=3, text=estimated_bpm)
+                        tag_dict['bpm'] = estimated_bpm
                         updated_fields.append(f"BPM: '{estimated_bpm}'")
                         self.stats['bpm_found'] += 1
-
-                audio.save()
+                        
+                # Use centralized write_id3 method
+                self.write_id3(filepath, tag_dict, dry_run=False)
 
                 print(f"   📝 Updated: {', '.join(updated_fields)}")
                 print(f"   💾 Enhanced via {identified['method']}")
@@ -2003,13 +2110,14 @@ class DJMusicCleaner:
     def process_folder(self, input_folder, output_folder=None, enhance_online=False, include_year_in_filename=False,
                       dj_analysis=True, analyze_quality=True, detect_key=True, detect_cues=True, calculate_energy=True,
                       normalize_loudness=False, target_lufs=-14.0, rekordbox_xml=None, export_xml=False,
-                      generate_report=True, high_quality_only=False, detailed_report=True):
+                      generate_report=True, high_quality_only=False, detailed_report=True, rekordbox_preserve=False,
+                      dry_run=False, workers=0, skip_id3=False):
         """Process a folder of MP3 files with enhanced DJ metadata analysis.
 
         Args:
             input_folder: Path to folder containing MP3 files
             output_folder: Path to output folder (creates if doesn't exist)
-            enhance_online: Whether to use online services for metadata enhancemen
+            enhance_online: Whether to use online services for metadata enhancement
             include_year_in_filename: Whether to include year in filenames
             dj_analysis: Whether to perform DJ-specific analysis
             analyze_quality: Whether to analyze audio quality
@@ -2018,12 +2126,15 @@ class DJMusicCleaner:
             calculate_energy: Whether to calculate energy rating
             normalize_loudness: Whether to normalize loudness
             target_lufs: Target LUFS for loudness normalization
-            rekordbox_xml: Path to Rekordbox XML file for metadata impor
+            rekordbox_xml: Path to Rekordbox XML file for metadata import
             export_xml: Whether to export Rekordbox XML after processing
-            generate_report: Whether to generate HTML repor
-
+            generate_report: Whether to generate HTML report
             high_quality_only: Only move high-quality (320kbps+) files to output folder
-            detailed_report: Generate detailed per-file changes repor
+            detailed_report: Generate detailed per-file changes report
+            rekordbox_preserve: Preserve Rekordbox DJ data during processing
+            dry_run: Preview changes without modifying files
+            workers: Number of parallel workers (0=auto)
+            skip_id3: Skip all ID3 tag modifications
         """
         start_time = time.time()
 
@@ -2553,6 +2664,7 @@ def main():
     adv_group.add_argument("--normalize", help="Enable loudness normalization", action="store_true")
     adv_group.add_argument("--lufs", help="Target LUFS for loudness normalization", type=float, default=-14.0)
     adv_group.add_argument("--rekordbox", help="Path to Rekordbox XML file for metadata import")
+    adv_group.add_argument("--rekordbox-preserve", help="Preserve Rekordbox DJ data (beat grid, cue points, etc.) during processing", action="store_true")
     adv_group.add_argument("--export-xml", help="Export Rekordbox XML after processing", action="store_true")
     adv_group.add_argument("--duplicates", help="Find duplicates in the input folder", action="store_true")
     adv_group.add_argument("--high-quality", help="Only move high-quality files (320kbps+) to output folder", action="store_true")
@@ -2561,6 +2673,9 @@ def main():
     adv_group.add_argument("--no-report", help="Disable HTML report generation", action="store_true")
     adv_group.add_argument("--detailed-report", help="Generate detailed per-file changes report", action="store_true", default=True)
     adv_group.add_argument("--no-detailed-report", help="Disable detailed per-file changes report", action="store_true")
+    adv_group.add_argument("--dry-run", help="Preview changes without modifying files", action="store_true")
+    adv_group.add_argument("--workers", help="Number of parallel workers for processing (0=auto)", type=int, default=0)
+    adv_group.add_argument("--no-id3", help="Skip all ID3 tag modifications", action="store_true")
 
     # Parse arguments
     args = parser.parse_args()
@@ -2586,12 +2701,19 @@ def main():
     print(f"📂 Output folder: {output_folder if output_folder else '[In-place]'}")
     print(f"🌐 Online enhancement: {'Enabled' if args.online else 'Disabled'}")
     print(f"🎛️ DJ analysis features: {'Disabled' if args.no_dj else 'Enabled'}")
+    print(f"📝 ID3 tag writing: {'Disabled' if args.no_id3 else 'Enabled'}")
+    print(f"🔍 Dry run mode: {'Enabled' if args.dry_run else 'Disabled'}")
+    print(f"⚡ Workers: {args.workers if args.workers > 0 else 'Auto'}")
+    
 
     if args.normalize:
         print(f"🔊 Loudness normalization: Enabled (Target: {args.lufs} LUFS)")
 
     if args.rekordbox:
         print(f"🎛️ Rekordbox XML import: {args.rekordbox}")
+        
+    if args.rekordbox_preserve:
+        print(f"🎵 Rekordbox round-trip preservation: Enabled")
 
     print(f"{'='*50}")
 
@@ -2625,16 +2747,56 @@ def main():
         rekordbox_xml=args.rekordbox,
         export_xml=args.export_xml,
         generate_report=args.report and not args.no_report,
-
         high_quality_only=args.high_quality,
-        detailed_report=args.detailed_report and not args.no_detailed_report
+        detailed_report=args.detailed_report and not args.no_detailed_report,
+        rekordbox_preserve=args.rekordbox_preserve,
+        # New PR1 flags
+        dry_run=args.dry_run,
+        workers=args.workers,
+        skip_id3=args.no_id3
     )
 
-    print(f"\n✅ Processed {len(processed_files)} files")
+    # Display summary table
+    print(f"\n✅ PROCESSING SUMMARY")
+    print(f"{'-'*50}")
+    print(f"Total files processed: {len(processed_files)}")
+    
+    # File operations stats
+    if 'files_saved' in cleaner.stats:
+        print(f"Files modified: {cleaner.stats['files_saved']}")
+    if 'backups_created' in cleaner.stats:
+        print(f"Backup files created: {cleaner.stats['backups_created']}")
+    if 'save_errors' in cleaner.stats:
+        print(f"Errors during save: {cleaner.stats['save_errors']}")
+    if 'files_would_change' in cleaner.stats and args.dry_run:
+        print(f"Files that would be modified (dry run): {cleaner.stats['files_would_change']}")
+    
+    # Enhanced metadata stats
+    if cleaner.stats['text_search_hits'] > 0 or cleaner.stats['fingerprint_hits'] > 0:
+        print(f"\nEnhanced metadata:")
+        print(f"  Text search hits: {cleaner.stats['text_search_hits']}")
+        print(f"  Fingerprint hits: {cleaner.stats['fingerprint_hits']}")
+        print(f"  Album data found: {cleaner.stats['album_found']}")
+        print(f"  Year data found: {cleaner.stats['year_found']}")
+        print(f"  Genre data found: {cleaner.stats['genre_found']}")
+    
+    # DJ-specific stats
+    if not args.no_dj:
+        print(f"\nDJ analysis:")
+        print(f"  BPM detected: {cleaner.stats.get('bpm_found', 0)}")
+        print(f"  Key detected: {cleaner.stats.get('key_found', 0)}")
+    
+    # Manual review info
     if cleaner.stats['manual_review_needed']:
         print(f"\n⚠️ {len(cleaner.stats['manual_review_needed'])} files need manual review")
-
-    print("\n✨ Done! Your DJ library is now professionally organized and enhanced.")
+    
+    # Operation mode info
+    if args.dry_run:
+        print(f"\n🔍 DRY RUN: No files were actually modified")
+    
+    # Final message
+    print(f"\n✨ Done! Your DJ library is now {'analyzed' if args.dry_run else 'professionally organized and enhanced'}.")
+    print(f"{'-'*50}")
 
 def cli_main():
     """Entry point for the CLI tool when installed via pip"""
