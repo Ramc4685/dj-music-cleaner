@@ -1,19 +1,30 @@
-# Core dependencies
-mutagen>=1.47
-musicbrainzngs>=0.7
-pyacoustid>=1.2.2
+# Core dependencies - required for basic operation
+mutagen>=1.47          # MP3 tag reading/writing
+tqdm>=4.66             # Progress bars
+numpy>=1.24            # Numerical processing
+python-dotenv>=1.0.0   # Environment variable management
 
-# Optional dependencies for DJ-specific features
-librosa>=0.10
-numpy>=1.24
-pyloudnorm>=0.1.1
-soundfile>=0.12
-tqdm>=4.66
-python-dotenv>=1.0.0
+# Audio processing - required for basic audio operations
+soundfile>=0.12        # Audio file reading
 
-# Optional: Highly recommended for key detection
-# Note: May require manual installation
+# Online services - required for online metadata enhancement
+musicbrainzngs>=0.7   # MusicBrainz API client
+pyacoustid>=1.2.2      # AcoustID audio fingerprinting
+
+# DJ feature analysis - improved stable implementation
+aubio>=0.5.0           # Primary audio analysis (BPM/beat detection)
+pyloudnorm>=0.1.1      # Loudness normalization
+
+# Legacy DJ analysis dependencies - will be fully replaced by aubio
+# Warning: These can cause stability issues with multiprocessing
+librosa>=0.10          # Audio feature extraction 
+
+# The following require manual installation:
+# essentia              # Audio feature extraction (not on PyPI)
+# madmom               # Beat detection (optional, advanced features only)
+
+# Optional: Advanced key detection (manual installation required)
 # pip install git+https://github.com/EvanPurkhiser/keyfinder-python.git
 
 # Optional dependency for Rekordbox playlist creation
-# pyrekordbox>=0.1.0
+# pyrekordbox>=0.1.0    # Rekordbox XML reading/writing

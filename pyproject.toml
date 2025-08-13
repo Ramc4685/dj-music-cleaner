@@ -1,48 +1,61 @@
 [project]
 name = "dj-music-cleaner"
 version = "1.0.0"
-description = "DJ library cleaner and analyzer for Rekordbox & MP3 collections"
+description = "DJ library cleaner and analyzer for MP3 collections with audio caching"
 readme = "README.md"
 requires-python = ">=3.9"
 license = "MIT"
 authors = [{ name = "RamC Venkatasamy" }]
-keywords = ["dj", "audio", "mp3", "metadata", "rekordbox"]
+keywords = ["dj", "audio", "mp3", "metadata", "rekordbox", "audio-analysis", "bpm-detection", "key-detection"]
 classifiers = [
+  "Development Status :: 4 - Beta",
+  "Environment :: Console", 
   "Programming Language :: Python :: 3",
   "Programming Language :: Python :: 3 :: Only",
   "Operating System :: OS Independent",
-  "Topic :: Multimedia :: Sound/Audio"
+  "Topic :: Multimedia :: Sound/Audio",
+  "Topic :: Multimedia :: Sound/Audio :: Analysis"
 ]
 
-# Minimal hard deps to run (others are optional via extras)
+# Core dependencies required for basic operation
 dependencies = [
-  "mutagen>=1.46",
-  "musicbrainzngs>=0.7"
+  "mutagen>=1.47",
+  "tqdm>=4.66",
+  "numpy>=1.24",
+  "python-dotenv>=1.0.0",
+  "soundfile>=0.12",
+  "musicbrainzngs>=0.7",
+  "pyacoustid>=1.2.2"
 ]
 
 [project.optional-dependencies]
-analysis = ["librosa>=0.10", "numpy>=1.24"]
-loudness = ["pyloudnorm>=0.1.1", "soundfile>=0.12"]
-online = ["pyacoustid>=1.2.2"]
-rekordbox = ["pyrekordbox>=0.1.7"]
-ui = ["tqdm>=4.66"]
+# DJ analysis modules for different use cases
+dj-analysis = ["aubio>=0.5.0", "librosa>=0.10"]  # BPM and key detection
+loudness = ["pyloudnorm>=0.1.1"]  # Loudness normalization
+rekordbox = ["pyrekordbox>=0.1.7"]  # Rekordbox XML support
+
+# Group installations
+basic = []  # All core dependencies are already included
 full = [
-  "librosa>=0.10",
-  "numpy>=1.24",
-  "pyloudnorm>=0.1.1",
-  "soundfile>=0.12",
-  "pyacoustid>=1.2.2",
-  "pyrekordbox>=0.1.7",
-  "tqdm>=4.66"
+  "aubio>=0.5.0",       # Primary audio analysis
+  "librosa>=0.10",      # Enhanced audio features
+  "pyloudnorm>=0.1.1",  # Loudness normalization
+  "pyrekordbox>=0.1.7"  # Rekordbox XML support
 ]
 
-# CLI entrypoint: installs a `djcleaner` command
+# CLI entrypoint: installs the `dj-music-cleaner` command
 [project.scripts]
-djcleaner = "djmusiccleaner.dj_music_cleaner:cli_main"
+dj-music-cleaner = "djmusiccleaner.dj_music_cleaner:cli_main"
 
 [project.urls]
 Homepage = "https://github.com/ramc46/dj-music-cleaner"
+BugTracker = "https://github.com/ramc46/dj-music-cleaner/issues"
 
 [tool.setuptools.packages.find]
 where = ["."]
 include = ["djmusiccleaner*"]
+exclude = ["djmusiccleaner.archive*"]
+
+[build-system]
+requires = ["setuptools>=42", "wheel"]
+build-backend = "setuptools.build_meta"

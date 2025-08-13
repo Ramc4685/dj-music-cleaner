@@ -232,8 +232,8 @@ class DJReportManager:
         print(f"📝 Duplicates report saved: {report_path}")
         return report_path
     
-    def generate_session_summary(self, output_folder=None):
-        """Generate a summary of the session"""
+    def generate_session_summary(self, stats=None, output_folder=None):
+        """Generate a summary of the session, using old script format"""
         summary_path = os.path.join(self.reports_dir, f"session_summary_{self.session_timestamp}.txt")
 
         with open(summary_path, 'w', encoding='utf-8') as f:
@@ -241,19 +241,100 @@ class DJReportManager:
             f.write("=" * 60 + "\n")
             f.write(f"Session: {self.session_timestamp}\n")
             f.write(f"Completed: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n\n")
-            f.write(f"Files processed: {len(self.processed_files)}\n")
-            f.write(f"High quality files moved: {len([f for f in self.processed_files if f.get('is_high_quality', False)])}\n")
-            f.write(f"Low quality files (not moved): {len(self.low_quality_files)}\n")
+            
+            # Get stats from the processed files if not provided
+            processed_count = len(self.processed_files)
+            high_quality_count = len([f for f in self.processed_files if f.get('is_high_quality', False)])
+            low_quality_count = len(self.low_quality_files)
+            
+            f.write(f"Files processed: {processed_count}\n")
+            f.write(f"High quality files moved: {high_quality_count}\n")
+            f.write(f"Low quality files (not moved): {low_quality_count}\n")
             f.write(f"Potential duplicates found: {len(self.duplicate_files)}\n\n")
+            
+            # Add output folder information
             if output_folder:
+                # In the old script format, this showed the full stats dictionary
+                # We'll show the actual output folder path instead
                 f.write(f"Clean files location: {output_folder}\n\n")
+            elif stats:
+                # Include raw stats if provided (matches old script's format)
+                f.write(f"Clean files location: {stats}\n\n")
             
             f.write("Reports generated:\n")
+            # Always include processed_files.json report
+            f.write(f"- Processed files database\n")
+            
             if self.low_quality_files:
                 f.write(f"- Low quality files report\n")
             if self.changes_log:
                 f.write(f"- Detailed changes report\n")
             if self.duplicate_files:
                 f.write(f"- Duplicates report\n")
+            
         print(f"📝 Session summary saved: {summary_path}")
         return summary_path
+        
+    def generate_json_changes_report(self, json_path=None):
+        """Generate a JSON report of all tag changes
+        
+        This creates a structured JSON file that shows all before/after tag changes
+        in a format compatible with the old script's processed_files.json format.
+        
+        Args:
+            json_path: Path where to save the JSON file. If None, uses default path.
+            
+        Returns:
+            Path to the generated JSON file or None if no changes to report
+        """
+        if not self.processed_files:
+            return None
+            
+        if json_path is None:
+            json_path = os.path.join(self.reports_dir, "processed_files.json")
+            
+        # Create a structured representation matching old script format
+        # with a "files" object containing file entries keyed by filename
+        result = {"files": {}, "last_update": datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
+        
+        # Add each processed file to the report
+        for file_info in self.processed_files:
+            file_name = os.path.basename(file_info.get("output_path") or file_info.get("input_path"))
+            
+            # Initialize file data structure
+            file_data = {
+                "input_path": file_info.get("input_path", ""),
+                "original_metadata": {},
+                "cleaned_metadata": {},
+                "changes": file_info.get("changes", []),
+                "enhanced": file_info.get("enhanced", False),
+                "is_high_quality": file_info.get("is_high_quality", False),
+                "bitrate": file_info.get("bitrate", 0),
+                "sample_rate": file_info.get("sample_rate", 0),
+                "last_processed": datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+            }
+            
+            # Add output path if available
+            if "output_path" in file_info:
+                file_data["output_path"] = file_info["output_path"]
+            
+            # Add initial and final tags if available
+            if "initial_tags" in file_info:
+                file_data["original_metadata"] = file_info["initial_tags"]
+            
+            if "final_tags" in file_info:
+                file_data["cleaned_metadata"] = file_info["final_tags"]
+            
+            # Add to result with filename as the key
+            result["files"][file_name] = file_data
+            
+        # Write to file
+        with open(json_path, 'w', encoding='utf-8') as f:
+            json.dump(result, f, indent=2, ensure_ascii=False)
+            
+        try:
+            print(f"✅ JSON report generated: {os.path.abspath(json_path)}")
+        except Exception:
+            print(f"✅ JSON report generated: {json_path}")
+            
+        return json_path

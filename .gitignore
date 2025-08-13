@@ -6,6 +6,7 @@ __pycache__/
 # Virtual envs
 .venv/
 venv/
+dj_cleaner_venv/
 
 # Build artifacts
 build/
@@ -23,4 +24,4 @@ dist/
 # Tests/data
 test_input/
 test_output/
-test_*
+test_*/
