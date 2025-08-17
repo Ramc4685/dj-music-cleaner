@@ -1,30 +1,113 @@
-# Core dependencies - required for basic operation
-mutagen>=1.47          # MP3 tag reading/writing
-tqdm>=4.66             # Progress bars
-numpy>=1.24            # Numerical processing
-python-dotenv>=1.0.0   # Environment variable management
+# DJ Music Cleaner v2.0 - Unified Architecture Requirements
 
-# Audio processing - required for basic audio operations
-soundfile>=0.12        # Audio file reading
+# =============================================================================
+# CORE DEPENDENCIES - Required for basic operation
+# =============================================================================
+mutagen>=1.47.0         # Audio metadata handling (ID3, FLAC, MP4, etc.)
+numpy>=1.24.0           # Numerical processing and array operations
+tqdm>=4.66.0            # Progress bars and status indicators
+soundfile>=0.12.0       # Audio file I/O (WAV, FLAC, etc.)
+python-dotenv>=1.0.0    # Environment variable management
 
-# Online services - required for online metadata enhancement
-musicbrainzngs>=0.7   # MusicBrainz API client
-pyacoustid>=1.2.2      # AcoustID audio fingerprinting
+# =============================================================================
+# AUDIO ANALYSIS - Professional DJ features
+# =============================================================================
+aubio>=0.4.9            # Primary audio analysis engine (stable, multiprocessing-safe)
+librosa>=0.10.0         # Enhanced audio analysis (fallback for advanced features)
+scipy>=1.10.0           # Signal processing and mathematical operations
 
-# DJ feature analysis - improved stable implementation
-aubio>=0.5.0           # Primary audio analysis (BPM/beat detection)
-pyloudnorm>=0.1.1      # Loudness normalization
+# =============================================================================
+# ONLINE ENHANCEMENT - Metadata enrichment services
+# =============================================================================
+pyacoustid>=1.2.2       # AcoustID audio fingerprinting
+musicbrainzngs>=0.7.1   # MusicBrainz API client for metadata lookup
+requests>=2.28.0        # HTTP client for web services
 
-# Legacy DJ analysis dependencies - will be fully replaced by aubio
-# Warning: These can cause stability issues with multiprocessing
-librosa>=0.10          # Audio feature extraction 
+# =============================================================================
+# ADVANCED FEATURES - Professional audio processing
+# =============================================================================
+pyloudnorm>=0.1.1       # Loudness normalization (EBU R128, LUFS)
 
-# The following require manual installation:
-# essentia              # Audio feature extraction (not on PyPI)
-# madmom               # Beat detection (optional, advanced features only)
+# =============================================================================
+# REKORDBOX INTEGRATION - Enhanced DJ workflow support
+# =============================================================================
+pyrekordbox>=0.4.0      # Rekordbox XML/DB parsing and analysis file support
 
-# Optional: Advanced key detection (manual installation required)
+# =============================================================================
+# INSTALLATION NOTES
+# =============================================================================
+
+# For full installation with all features:
+# pip install -e .[full]
+
+# For minimal installation (core features only):
+# pip install -e .
+
+# For development:
+# pip install -e .[dev]
+
+# Individual feature groups:
+# pip install -e .[audio]      # Audio analysis features
+# pip install -e .[online]     # Online metadata enhancement
+# pip install -e .[advanced]   # Advanced processing features
+
+# =============================================================================
+# OPTIONAL MANUAL INSTALLATIONS
+# =============================================================================
+
+# The following packages require manual installation if you want
+# enhanced audio analysis capabilities:
+
+# Essentia (advanced audio analysis):
+# Linux/macOS: pip install essentia
+# Windows: See https://essentia.upf.edu/installing.html
+
+# KeyFinder (enhanced key detection):
 # pip install git+https://github.com/EvanPurkhiser/keyfinder-python.git
 
-# Optional dependency for Rekordbox playlist creation
-# pyrekordbox>=0.1.0    # Rekordbox XML reading/writing
+# Madmom (alternative beat detection):
+# pip install madmom
+
+# =============================================================================
+# SYSTEM DEPENDENCIES (Operating System Level)
+# =============================================================================
+
+# Ubuntu/Debian:
+# sudo apt-get install libsndfile1-dev libfftw3-dev libavcodec-dev libavformat-dev
+
+# macOS (with Homebrew):
+# brew install libsndfile fftw ffmpeg
+
+# Windows:
+# No additional system dependencies required
+# All dependencies are available via pip/conda
+
+# =============================================================================
+# PERFORMANCE RECOMMENDATIONS
+# =============================================================================
+
+# For best performance:
+# - Install on SSD for faster caching
+# - Use Python 3.11+ for optimal performance
+# - Ensure at least 4GB RAM for large collections
+# - Consider using conda for complex dependency resolution:
+#   conda install -c conda-forge aubio librosa scipy numpy
+
+# =============================================================================
+# COMPATIBILITY NOTES
+# =============================================================================
+
+# Python Version Support:
+# - Minimum: Python 3.9
+# - Recommended: Python 3.11+
+# - Tested on: Python 3.9, 3.10, 3.11, 3.12
+
+# Platform Support:
+# - Linux (Ubuntu 20.04+, CentOS 8+)
+# - macOS (10.15+)
+# - Windows (10+)
+
+# Architecture Support:
+# - x86_64 (Intel/AMD 64-bit)
+# - arm64 (Apple Silicon M1/M2)
+# - Limited: arm32 (Raspberry Pi)

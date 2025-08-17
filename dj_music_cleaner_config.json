@@ -1,0 +1,88 @@
+{
+  "metadata": {
+    "description": "DJ Music Cleaner - Default Configuration",
+    "version": "2.0.0",
+    "created": "2025-08-15"
+  },
+  
+  "processing": {
+    "workers": 8,
+    "dry_run": false,
+    "skip_existing": true,
+    "enhance_online": true,
+    "acoustid_api_key": "YTRjbFYfoZ"
+  },
+  
+  "file_operations": {
+    "allow_rename": true,
+    "include_year_in_filename": false,
+    "organize_files": false,
+    "output_directory": "/Users/ramc/Documents/Songs/Tamil_Songs_processed"
+  },
+  
+  "audio_analysis": {
+    "analyze_bpm": true,
+    "analyze_key": true,
+    "analyze_energy": true,
+    "analyze_quality": false
+  },
+  
+  "advanced_features": {
+    "enable_advanced_cues": true,
+    "enable_advanced_beatgrid": true,
+    "enable_calibrated_energy": true,
+    "enable_professional_reporting": true,
+    "cue_detection_sensitivity": "high",
+    "detect_intro_outro": true,
+    "detect_mix_points": true,
+    "detect_energy_changes": true
+  },
+  
+  "cache": {
+    "use_cache": true,
+    "force_refresh": true,
+    "cache_timeout_days": 30
+  },
+  
+  "rekordbox": {
+    "xml_path": "/Users/ramc/Library/rekordbox/rekordbox/rekordbox.xml",
+    "update_rekordbox": true,
+    "create_backup": true,
+    "preserve_existing_data": true,
+    "report_path": "/Users/ramc/Documents/Songs/Tamil_Songs_processed/reports",
+    "export_path": "/Users/ramc/Documents/Songs/Tamil_Songs_processed/xml",
+    "use_pyrekordbox": true,
+    "enable_database_import": false,
+    "enable_analysis_extraction": false,
+    "enable_waveform_extraction": false,
+    "database_path": null,
+    "analysis_files_path": null
+  },
+  
+  "quality_filtering": {
+    "min_quality_score": 0.0,
+    "skip_duplicates": true,
+    "min_file_size_mb": 1.0,
+    "min_bitrate_kbps": 320,
+    "check_bitrate": true
+  },
+  
+  "reporting": {
+    "generate_report": true,
+    "report_format": "json",
+    "report_path": "/Users/ramc/Documents/Songs/Tamil_Songs_processed/reports"
+  },
+  
+  "logging": {
+    "console_level": "INFO",
+    "file_level": "INFO",
+    "log_dir": "/Users/ramc/Documents/Code/dj-music-cleaner/logs",
+    "enable_console": true
+  },
+  
+  "analytics": {
+    "advanced_reporting": true,
+    "detailed_tracking": true,
+    "performance_monitoring": true
+  }
+}

@@ -17,6 +17,13 @@ dist/
 .DS_Store
 .vscode/
 .idea/
+.claude/
+
+# Logs
+logs/
+
+# Reports
+reports/
 
 # Environment variables
 .env
